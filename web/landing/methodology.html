@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Opportunity Index — Evidence Valuation Methodology</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-950 text-gray-100 antialiased">
+
+    <!-- Nav -->
+    <nav class="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
+        <div class="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <a href="/" class="flex items-center gap-3 hover:opacity-80 transition">
+                    <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center font-bold text-sm">AI</div>
+                    <span class="text-lg font-semibold">AI Opportunity Index</span>
+                </a>
+                <span class="text-xs text-gray-500 ml-2">Methodology</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="/whitepaper" class="text-gray-400 hover:text-white text-sm">Whitepaper</a>
+                <a href="/" class="text-gray-400 hover:text-white text-sm">Back to Home</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Content -->
+    <article class="pt-28 pb-20 max-w-4xl mx-auto px-6">
+
+        <header class="mb-16 text-center">
+            <p class="text-brand-500 text-sm font-medium uppercase tracking-wide mb-3">Methodology</p>
+            <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-6">
+                From Evidence to Factor Score:<br>A Principled Approach to Measuring AI Adoption
+            </h1>
+            <p class="text-lg text-gray-400 max-w-2xl mx-auto mb-6">
+                How the evidence valuation pipeline transforms raw corporate disclosures into a reliable, investable AI adoption signal.
+            </p>
+            <div class="flex justify-center gap-6 text-sm text-gray-500">
+                <span>Winona Quantitative Research</span>
+                <span>|</span>
+                <span>February 2026</span>
+            </div>
+        </header>
+
+        <div class="prose prose-invert max-w-none space-y-12">
+
+            <!-- Section 1 -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">The Problem with Naive Scoring</h2>
+                <p class="text-gray-300 leading-relaxed">
+                    Most attempts to quantify corporate AI adoption suffer from the same fundamental flaw: they treat all evidence as equal. A company that mentions "artificial intelligence" in its 10-K receives the same credit as one that reports "$200M in annualized cost savings from its machine learning platform." Forward-looking guidance is weighted identically to measured outcomes. The result is a noisy signal where companies skilled at AI marketing score comparably to companies skilled at AI execution. This problem mirrors a well-understood challenge in factor investing: the raw characteristic must be carefully transformed before it can serve as a reliable scoring signal. Our evidence valuation pipeline addresses this by introducing a structured intermediary stage between evidence extraction and index scoring &mdash; one that classifies, values, and contextualizes each piece of evidence before it contributes to a company's AI Opportunity Factor score.
+                </p>
+            </section>
+
+            <!-- Section 2 -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">Evidence Classification: Plan, Investment, Capture</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Drawing on the distinction between "applied" and "mentioned" AI adoption identified in recent computational linguistics research (Frontiers in Artificial Intelligence, 2025), we classify every extracted evidence passage into one of three types. <em class="text-gray-200">Plan</em> evidence captures forward-looking statements and strategic guidance &mdash; "we intend to deploy generative AI across customer service by 2027." <em class="text-gray-200">Investment</em> evidence reflects committed action &mdash; "we deployed a computer vision system across three manufacturing divisions last quarter, with $45M in associated capital expenditure." <em class="text-gray-200">Capture</em> evidence documents measured outcomes &mdash; "AI-driven automation reduced customer support costs by 33%, saving approximately $120M annually."
+                </p>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    This taxonomy is not merely a label; it determines both the structure of the valuation (plans require probability estimates and time horizons, captures require before/after metrics) and the weight assigned in the final factor score. The classification draws on the methodology of Ante and Saggu (2025), whose "Quantifying a Firm's AI Engagement" demonstrated that multiplicative scoring of AI mentions in 10-K filings &mdash; weighting by specificity and context &mdash; produces signals validated against subsequent stock returns.
+                </p>
+
+                <!-- Factor formula callout -->
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 my-6">
+                    <p class="text-sm text-gray-400 uppercase tracking-wide mb-3 font-medium">Factor Score Formula</p>
+                    <code class="text-brand-500 text-lg font-mono">group_score = specificity &times; magnitude &times; stage_weight &times; recency</code>
+                    <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <span class="text-gray-400 font-medium">specificity</span>
+                            <span class="text-gray-500"> &mdash; 0&ndash;1: concreteness vs. boilerplate</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-400 font-medium">magnitude</span>
+                            <span class="text-gray-500"> &mdash; 0&ndash;1: dollar estimate / revenue</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-400 font-medium">stage_weight</span>
+                            <span class="text-gray-500"> &mdash; plan=0.3, investment=0.7, capture=1.0</span>
+                        </div>
+                        <div>
+                            <span class="text-gray-400 font-medium">recency</span>
+                            <span class="text-gray-500"> &mdash; 0.7<sup>years_old</sup>, floor 0.3</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 3 -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">The Valuation Pipeline: From Passages to Dollar Estimates</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Each evidence group passes through a two-stage valuation process. In the <em class="text-gray-200">preliminary</em> stage, an LLM independently evaluates the group's passages, classifies the evidence type, estimates a dollar range for the potential or realized impact, and produces a structured narrative. Plan evidence receives probability-weighted horizon estimates; investment evidence receives deployment scope and completion assessments; capture evidence receives measured metric deltas and annualized dollar impacts.
+                </p>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    In the <em class="text-gray-200">regressive final</em> stage, the LLM re-evaluates each group in the context of all prior final valuations for the same company. This sequential processing &mdash; conceptually analogous to the Fama-French practice of controlling for one characteristic while measuring another &mdash; allows the system to identify and flag discrepancies between evidence groups. When a company's 10-K claims "$500M in AI savings" but its earnings call reports only "$50M in identified efficiencies," the newer, more specific evidence is trusted, and the discrepancy is recorded with an explicit resolution rationale.
+                </p>
+
+                <!-- Pipeline diagram -->
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 my-6">
+                    <p class="text-sm text-gray-400 uppercase tracking-wide mb-3 font-medium">Pipeline Stages</p>
+                    <div class="flex items-center justify-between text-sm font-mono gap-2">
+                        <div class="bg-gray-800 rounded-lg px-3 py-2 text-center">
+                            <div class="text-brand-500 font-semibold">1. Munge</div>
+                            <div class="text-gray-500 text-xs mt-1">Group passages</div>
+                        </div>
+                        <div class="text-gray-600">&rarr;</div>
+                        <div class="bg-gray-800 rounded-lg px-3 py-2 text-center">
+                            <div class="text-brand-500 font-semibold">2. Preliminary</div>
+                            <div class="text-gray-500 text-xs mt-1">LLM classify + value</div>
+                        </div>
+                        <div class="text-gray-600">&rarr;</div>
+                        <div class="bg-gray-800 rounded-lg px-3 py-2 text-center">
+                            <div class="text-brand-500 font-semibold">3. Final</div>
+                            <div class="text-gray-500 text-xs mt-1">Regressive context</div>
+                        </div>
+                        <div class="text-gray-600">&rarr;</div>
+                        <div class="bg-gray-800 rounded-lg px-3 py-2 text-center">
+                            <div class="text-brand-500 font-semibold">4. Aggregate</div>
+                            <div class="text-gray-500 text-xs mt-1">Factor scores</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 4 -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">The Factor Score: Multiplicative Construction</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The final factor score for each evidence group is computed as the product of four components: <em class="text-gray-200">specificity</em> (how concrete and detailed the evidence is, versus boilerplate), <em class="text-gray-200">magnitude</em> (the dollar estimate scaled relative to company revenue), <em class="text-gray-200">stage weight</em> (plan = 0.3, investment = 0.7, capture = 1.0), and <em class="text-gray-200">recency</em> (exponential time decay with a floor). This multiplicative construction, adapted from Ante and Saggu's validated approach, ensures that a single highly specific, large-magnitude, recently captured outcome contributes more to a company's score than a dozen vague, undated plans.
+                </p>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The approach also draws a conceptual parallel to factor index construction methodology: just as Fama and French (1993) established that turning a continuous firm-level characteristic into a reliable factor requires careful normalization, breakpoint determination, and cross-sectional ranking, our pipeline transforms raw LLM-extracted evidence into a normalized, comparable score through structured valuation and multiplicative weighting. The company-level aggregation separates <em class="text-gray-200">potential value</em> (dollar estimates from plan and investment evidence) from <em class="text-gray-200">actual value</em> (dollar estimates from capture evidence only), giving investors two distinct lenses on AI adoption &mdash; what a company says it will do, and what it has demonstrably done.
+                </p>
+            </section>
+
+            <!-- Section 5 -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">From Score to Index: Portfolio-Ready Output</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The evidence valuation pipeline produces scores that feed directly into the AI Opportunity Index's factor construction. Per-dimension scores (cost, revenue, general) are aggregated from final valuations, with diminishing returns at the upper bound to prevent any single company from being dominated by evidence volume rather than evidence quality. These scores integrate with the existing 4-value framework &mdash; Cost Opportunity, Cost Capture, Revenue Opportunity, Revenue Capture &mdash; where the valuation pipeline replaces the previous naive confidence-summing approach for capture scoring.
+                </p>
+                <p class="text-gray-300 leading-relaxed">
+                    The result is a factor that can be applied in the style of modern index providers: companies are ranked by their AI Adoption Factor score, weights are tilted proportionally (score-tilted market capitalization weighting per industry standard), and the index is reconstituted as new evidence is processed. Unlike thematic AI indices that make a binary inclusion decision ("is this an AI company?"), the factor approach scores <em class="text-gray-200">every</em> company on a continuous scale &mdash; capturing not just which companies are in the AI business, but how deeply any company is adopting AI across its operations, and crucially, whether that adoption is producing measurable economic value.
+                </p>
+            </section>
+
+            <!-- References -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">References</h2>
+                <ul class="text-gray-400 space-y-2 text-sm">
+                    <li>Ante, L. &amp; Saggu, A. (2025). "Quantifying a Firm's AI Engagement: Constructing an AI Score from 10-K Filings." <em>Working paper.</em></li>
+                    <li>Frontiers in Artificial Intelligence (2025). "Applied vs. Mentioned: LLM-Based Distinction of Corporate AI Adoption." <em>Frontiers.</em></li>
+                    <li>Microsoft Research (2025). "Working with AI: Occupation-Level AI Applicability Scoring." <em>GitHub: microsoft/working-with-ai.</em></li>
+                    <li>Fama, E. &amp; French, K. (1993). "Common Risk Factors in the Returns on Stocks and Bonds." <em>Journal of Financial Economics, 33(1), 3-56.</em></li>
+                </ul>
+            </section>
+
+        </div>
+
+        <!-- CTA -->
+        <div class="mt-16 text-center border-t border-gray-800 pt-12">
+            <h3 class="text-xl font-semibold mb-4">Read the Full Whitepaper</h3>
+            <p class="text-gray-400 mb-6">For the complete 4-value scoring framework including AI Opportunity and AI Capture dimensions, data sources, and portfolio construction.</p>
+            <div class="flex justify-center gap-4">
+                <a href="/whitepaper" class="bg-gray-800 hover:bg-gray-700 text-white px-8 py-3 rounded-xl text-sm font-semibold transition inline-block">
+                    Read Whitepaper
+                </a>
+                <a href="/#subscribe" class="bg-brand-600 hover:bg-brand-700 text-white px-8 py-3 rounded-xl text-sm font-semibold transition shadow-lg shadow-brand-600/20 inline-block">
+                    Sign Up for Early Access
+                </a>
+            </div>
+        </div>
+    </article>
+
+    <!-- Footer -->
+    <footer class="py-8 border-t border-gray-800">
+        <div class="max-w-7xl mx-auto px-6 text-center text-sm text-gray-500">
+            &copy; 2025 Winona Quantitative Research. All rights reserved. | <a href="/" class="text-gray-400 hover:text-white">Home</a> | <a href="/whitepaper" class="text-gray-400 hover:text-white">Whitepaper</a>
+        </div>
+    </footer>
+
+</body>
+</html>

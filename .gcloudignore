@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.env
+data/raw/filings/
+data/raw/company_universe.csv
+data/raw/financials_cache.csv
+data/microsoft_ai_applicability/
+investment_theses/
+*.pdf
+.claude/

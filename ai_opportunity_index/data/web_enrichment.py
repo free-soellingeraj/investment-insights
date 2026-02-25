@@ -1,0 +1,247 @@
+"""Web enrichment — scrape careers, IR, and blog pages for AI signals.
+
+Uses requests + BeautifulSoup to fetch pages, condenses text, then uses
+Gemini Flash via pydantic_ai for structured extraction of AI evidence
+classified by target dimension (cost/revenue/general) and capture stage
+(planned/invested/realized).
+"""
+
+import json
+import logging
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+from ai_opportunity_index.config import (
+    LLM_EXTRACTION_MODEL,
+    RAW_DIR,
+    WEB_SCRAPE_RATE_LIMIT_SECONDS,
+    get_google_provider,
+)
+
+logger = logging.getLogger(__name__)
+
+WEB_ENRICHMENT_CACHE_DIR = RAW_DIR / "web_enrichment"
+
+# ── Pydantic Output Models ────────────────────────────────────────────────
+
+
+class WebEvidenceItem(BaseModel):
+    """A single piece of evidence extracted from a web page."""
+    passage_text: str  # verbatim excerpt or summary of what was found
+    target_dimension: Literal["cost", "revenue", "general"]
+    capture_stage: Literal["planned", "invested", "realized"]
+    confidence: float  # 0-1
+    reasoning: str  # why this is evidence of AI cost/revenue activity
+
+
+class WebEvidence(BaseModel):
+    """Structured extraction result from a single web page."""
+    evidence_items: list[WebEvidenceItem] = Field(default_factory=list)
+    page_summary: str = ""  # brief summary of what was on the page
+
+
+# ── Extraction Prompts ────────────────────────────────────────────────────
+
+CAREERS_PROMPT = """\
+You are an expert analyst identifying evidence of AI investment from a company's careers page.
+
+For each relevant signal you find, provide:
+- **passage_text**: The verbatim excerpt from the page (max 300 characters) — copy the exact text, \
+do not paraphrase. This should be the job title, description snippet, or qualification that shows AI activity.
+- **target_dimension**: "cost" if the role automates internal processes (MLOps, automation engineer, RPA, \
+AI operations); "revenue" if it builds AI products/services for customers (AI product manager, \
+AI solutions architect, generative AI engineer); "general" if unclear.
+- **capture_stage**: Always "invested" — active hiring represents committed spending.
+- **confidence**: 0.0-1.0 reflecting how clearly this is AI-related hiring.
+- **reasoning**: Brief explanation of your classification.
+
+Provide a brief page_summary of overall hiring activity.
+"""
+
+IR_PROMPT = """\
+You are an expert financial analyst extracting AI investment evidence from a company's investor relations page.
+
+For each relevant signal you find, provide:
+- **passage_text**: The verbatim excerpt from the page (max 300 characters) — copy the exact text, \
+do not paraphrase. This should be the sentence or phrase that demonstrates the AI activity.
+- **target_dimension**: "cost" if about AI reducing internal costs or improving efficiency; \
+"revenue" if about AI products/services generating revenue; "general" if broad AI strategy/R&D.
+- **capture_stage**: "planned" for announced intentions or strategy; "invested" for reported \
+spending or partnerships; "realized" for reported savings, revenue, or measurable results.
+- **confidence**: 0.0-1.0 reflecting how specific and credible the evidence is.
+- **reasoning**: Brief explanation of your classification.
+
+Look for: AI strategy announcements, AI spending/investment figures, AI revenue or savings metrics, \
+AI partnerships, AI product launches mentioned in press releases.
+Provide a brief page_summary of the IR page content.
+"""
+
+BLOG_PROMPT = """\
+You are an expert technology analyst extracting AI investment evidence from a company's blog or newsroom.
+
+For each relevant signal you find, provide:
+- **passage_text**: The verbatim excerpt from the page (max 300 characters) — copy the exact text, \
+do not paraphrase. This should be the sentence or phrase that demonstrates the AI activity.
+- **target_dimension**: "cost" if about internal AI automation or efficiency gains; \
+"revenue" if about AI-powered products, features, or services for customers; "general" if broad AI commentary.
+- **capture_stage**: "planned" for announced plans or upcoming features; "invested" for launched products \
+or deployed internal tools; "realized" for reported metrics, adoption numbers, or revenue/savings figures.
+- **confidence**: 0.0-1.0 reflecting how concrete and specific the evidence is.
+- **reasoning**: Brief explanation of your classification.
+
+Look for: AI product launches, AI feature announcements, AI efficiency improvements, \
+AI adoption metrics, customer success stories with AI.
+Provide a brief page_summary of the blog content.
+"""
+
+# ── HTTP Scraping ─────────────────────────────────────────────────────────
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+MAX_TEXT_CHARS = 15_000
+
+
+def _fetch_and_condense(url: str) -> str | None:
+    """Fetch a URL and return condensed visible text, or None on failure."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning("HTTP fetch failed for %s: %s", url, e)
+        return None
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # Remove non-content elements
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg", "iframe"]):
+        tag.decompose()
+
+    text = soup.get_text(separator="\n", strip=True)
+
+    # Collapse whitespace
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    text = "\n".join(lines)
+
+    # Truncate
+    if len(text) > MAX_TEXT_CHARS:
+        text = text[:MAX_TEXT_CHARS]
+
+    return text if text else None
+
+
+# ── LLM Extraction ───────────────────────────────────────────────────────
+
+def _extract_structured(text: str, prompt: str, output_type: type) -> object | None:
+    """Use pydantic_ai + Gemini Flash to extract structured data from text."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.google import GoogleModel
+
+    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
+    agent = Agent(model, output_type=output_type)
+
+    full_prompt = f"{prompt}\n\n--- PAGE CONTENT ---\n{text}"
+
+    try:
+        result = agent.run_sync(full_prompt)
+        usage = result.usage()
+        logger.info(
+            "Web enrichment LLM: input=%d output=%d total=%d tokens",
+            usage.input_tokens or 0,
+            usage.output_tokens or 0,
+            usage.total_tokens or 0,
+        )
+        return result.output
+    except Exception as e:
+        logger.warning("LLM extraction failed: %s", e)
+        return None
+
+
+# ── Per-Page Scrapers ─────────────────────────────────────────────────────
+
+def _scrape_page(url: str, prompt: str) -> dict | None:
+    """Scrape a URL, extract structured evidence, return result dict."""
+    time.sleep(WEB_SCRAPE_RATE_LIMIT_SECONDS)
+
+    text = _fetch_and_condense(url)
+    if not text:
+        return None
+
+    extracted = _extract_structured(text, prompt, WebEvidence)
+    if not extracted:
+        return None
+
+    return {
+        "url": url,
+        "scraped_at": datetime.utcnow().isoformat(),
+        "metadata": {"text_length": len(text)},
+        "markdown_length": len(text),
+        "evidence_items": [item.model_dump() for item in extracted.evidence_items],
+        "page_summary": extracted.page_summary,
+    }
+
+
+def scrape_careers_page(url: str) -> dict | None:
+    """Scrape a careers page for AI hiring signals."""
+    return _scrape_page(url, CAREERS_PROMPT)
+
+
+def scrape_ir_page(url: str) -> dict | None:
+    """Scrape an investor relations page for AI strategy signals."""
+    return _scrape_page(url, IR_PROMPT)
+
+
+def scrape_blog_page(url: str) -> dict | None:
+    """Scrape a blog page for AI product announcements."""
+    return _scrape_page(url, BLOG_PROMPT)
+
+
+# ── Main Entry Point ─────────────────────────────────────────────────────
+
+def fetch_web_enrichment(
+    ticker: str,
+    company_name: str,
+    careers_url: str | None = None,
+    ir_url: str | None = None,
+    blog_url: str | None = None,
+) -> dict:
+    """Fetch web enrichment data for a company.
+
+    Returns a dict with careers, investor_relations, and blog sub-keys,
+    each containing evidence_items and page_summary, or None.
+    """
+    result = {
+        "ticker": ticker,
+        "company_name": company_name,
+        "collected_at": datetime.utcnow().isoformat(),
+        "careers": None,
+        "investor_relations": None,
+        "blog": None,
+    }
+
+    if careers_url:
+        logger.debug("Scraping careers page for %s: %s", ticker, careers_url)
+        result["careers"] = scrape_careers_page(careers_url)
+
+    if ir_url:
+        logger.debug("Scraping IR page for %s: %s", ticker, ir_url)
+        result["investor_relations"] = scrape_ir_page(ir_url)
+
+    if blog_url:
+        logger.debug("Scraping blog page for %s: %s", ticker, blog_url)
+        result["blog"] = scrape_blog_page(blog_url)
+
+    return result

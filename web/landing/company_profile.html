@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{TICKER}} — AI Opportunity Index</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: {
+                brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+            }}}
+        }
+    </script>
+    <style>
+        .loader { border: 3px solid #374151; border-top: 3px solid #6366f1; border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; display: inline-block; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .score-bar { height: 8px; border-radius: 4px; background: #1f2937; overflow: hidden; }
+        .score-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 antialiased">
+    <script>
+        const AUTH_TOKEN = "{{TOKEN}}";
+        const TICKER = "{{TICKER}}";
+    </script>
+
+    <!-- Nav -->
+    <nav class="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
+        <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <a href="/dashboard?token={{TOKEN}}" class="text-gray-400 hover:text-white text-sm">&larr; Dashboard</a>
+                <span class="text-gray-700">|</span>
+                <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center font-bold text-sm">AI</div>
+                <span class="text-lg font-semibold" id="nav-title">{{TICKER}}</span>
+            </div>
+            <a href="/status" class="text-gray-400 hover:text-white text-sm">Pipeline Status</a>
+        </div>
+    </nav>
+
+    <div class="pt-24 max-w-5xl mx-auto px-6 pb-20">
+        <div id="loading" class="text-center py-20"><div class="loader mx-auto"></div><p class="mt-3 text-gray-500">Loading company profile...</p></div>
+        <div id="content" class="hidden"></div>
+    </div>
+
+    <script>
+    const fmtScore = v => v != null ? v.toFixed(3) : '—';
+    const fmtRoi = v => v != null ? v.toFixed(2) + 'x' : '—';
+    const fmtMoney = (v, units) => {
+        if (v == null) return '—';
+        if (units === 'count') return Math.round(v).toLocaleString();
+        if (v >= 1e12) return '$' + (v / 1e12).toFixed(2) + 'T';
+        if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+        if (v >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
+        return '$' + v.toLocaleString();
+    };
+
+    function scoreColor(v) {
+        if (v == null) return '#4b5563';
+        if (v >= 0.7) return '#22c55e';
+        if (v >= 0.4) return '#eab308';
+        if (v >= 0.2) return '#f97316';
+        return '#ef4444';
+    }
+
+    function scoreBar(label, value, color) {
+        const pct = value != null ? Math.min(value * 100, 100) : 0;
+        return `
+            <div class="flex items-center gap-3 py-1.5">
+                <span class="text-xs text-gray-400 w-32 flex-shrink-0">${label}</span>
+                <div class="score-bar flex-1"><div class="score-bar-fill" style="width:${pct}%;background:${color || scoreColor(value)}"></div></div>
+                <span class="font-mono text-xs w-14 text-right" style="color:${color || scoreColor(value)}">${fmtScore(value)}</span>
+            </div>`;
+    }
+
+    function quadrantBadge(q, label) {
+        const cls = {
+            'high_opp_high_real': 'bg-green-900/50 text-green-400 border-green-800',
+            'high_opp_low_real': 'bg-yellow-900/50 text-yellow-400 border-yellow-800',
+            'low_opp_high_real': 'bg-blue-900/50 text-blue-400 border-blue-800',
+            'low_opp_low_real': 'bg-gray-800 text-gray-400 border-gray-700',
+        };
+        return `<span class="px-3 py-1.5 rounded-lg text-sm font-semibold border ${cls[q] || cls['low_opp_low_real']}">${label || q || '—'}</span>`;
+    }
+
+    const stageColors = { planned: 'bg-blue-900/40 text-blue-400', invested: 'bg-yellow-900/40 text-yellow-400', realized: 'bg-green-900/40 text-green-400' };
+    const dimColors = { cost: 'border-green-600', revenue: 'border-purple-600', general: 'border-yellow-600', unclassified: 'border-gray-600' };
+    const dimLabels = { cost: 'Cost-targeted Evidence', revenue: 'Revenue-targeted Evidence', general: 'General AI Evidence', unclassified: 'Other Evidence' };
+    const dimIcons = { cost: '💰', revenue: '📈', general: '🤖', unclassified: '📋' };
+
+    async function load() {
+        try {
+            const [data, peersData] = await Promise.all([
+                fetch(`/api/companies/${TICKER}`).then(r => r.json()),
+                fetch(`/api/companies/${TICKER}/peers`).then(r => r.json()),
+            ]);
+
+            if (data.error) {
+                document.getElementById('loading').innerHTML = `<p class="text-red-400 text-lg">${TICKER} not found</p>`;
+                return;
+            }
+
+            const s = data.scores || {};
+            const fin = data.financials || {};
+            const peers = peersData.peers || [];
+            const evidence = data.evidence || {};
+
+            document.getElementById('nav-title').textContent = `${data.ticker} — ${data.company_name || ''}`;
+            document.title = `${data.ticker} — AI Opportunity Index`;
+
+            let h = '';
+
+            // ── Header ──────────────────────────────────────────────────
+            h += `<div class="mb-8">
+                <div class="flex items-start justify-between flex-wrap gap-4">
+                    <div>
+                        <h1 class="text-3xl font-bold">${data.ticker} <span class="text-gray-500 font-normal text-xl">— ${data.company_name || ''}</span></h1>
+                        <p class="text-sm text-gray-400 mt-1">${[data.sector, data.industry, data.exchange].filter(Boolean).join(' · ')}</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        ${quadrantBadge(s.quadrant, s.quadrant_label)}
+                        <button onclick="requestRefresh()" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-medium">Request Refresh</button>
+                    </div>
+                </div>
+            </div>`;
+
+            // ── Financials row ───────────────────────────────────────────
+            const finItems = [
+                { label: 'Market Cap', key: 'market_cap' },
+                { label: 'Revenue', key: 'revenue' },
+                { label: 'Net Income', key: 'net_income' },
+                { label: 'Employees', key: 'employees' },
+            ];
+            h += '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">';
+            for (const fi of finItems) {
+                const obs = fin[fi.key];
+                h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                    <div class="text-xs text-gray-500 uppercase tracking-wide">${fi.label}</div>
+                    <div class="text-xl font-bold mt-1">${obs ? fmtMoney(obs.value, obs.value_units) : '—'}</div>
+                    ${obs?.source_name ? `<div class="text-xs text-gray-600 mt-1">via ${obs.source_name}</div>` : ''}
+                </div>`;
+            }
+            h += '</div>';
+
+            // ── Scores ──────────────────────────────────────────────────
+            h += '<div class="grid md:grid-cols-2 gap-6 mb-8">';
+
+            // Opportunity scores
+            h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h3 class="font-semibold mb-2 text-gray-300">Opportunity Scores</h3>
+                <p class="text-xs text-gray-500 mb-3">How much could AI structurally help this company? Derived from BLS workforce data and Microsoft AI applicability research.</p>
+                ${scoreBar('Cost Opportunity', s.cost_opp, '#22c55e')}
+                <div class="text-xs text-gray-600 mb-2 pl-[140px]">What share of this company's workforce performs tasks that AI could automate or augment, reducing operating costs.</div>
+                ${scoreBar('Revenue Opportunity', s.revenue_opp, '#8b5cf6')}
+                <div class="text-xs text-gray-600 mb-2 pl-[140px]">How much AI could enhance or create new revenue streams, based on industry and product mix.</div>
+                ${scoreBar('Composite', s.composite_opp, '#818cf8')}
+                <div class="text-xs text-gray-600 mb-1 pl-[140px]">Weighted average of cost and revenue opportunity (50/50).</div>
+                <div class="mt-4 bg-gray-800/50 rounded-lg p-3 text-xs text-gray-500 leading-relaxed">
+                    <strong class="text-gray-400">How to read:</strong> 0.0 = AI has minimal applicability to this company's operations.
+                    0.5 = moderate — some roles and revenue lines could benefit.
+                    1.0 = very high — most of the workforce and revenue are in AI-transformable areas.
+                    These scores reflect <em>structural potential</em>, not what the company is actually doing with AI (that's Capture).
+                </div>
+            </div>`;
+
+            // Capture/Realization scores
+            h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h3 class="font-semibold mb-2 text-gray-300">Capture Scores</h3>
+                <p class="text-xs text-gray-500 mb-3">What is this company actually doing with AI? Evidence from SEC filings, news, hiring, and patents.</p>
+                <div class="text-xs text-gray-600 uppercase tracking-wide mb-2 font-semibold">Dimension capture (classified outputs)</div>
+                ${scoreBar('Cost Capture', s.cost_capture, '#22c55e')}
+                <div class="text-xs text-gray-600 mb-2 pl-[140px]">Evidence of AI deployed to reduce costs (automation, efficiency).</div>
+                ${scoreBar('Revenue Capture', s.revenue_capture, '#8b5cf6')}
+                <div class="text-xs text-gray-600 mb-2 pl-[140px]">Evidence of AI-powered products, services, or revenue growth.</div>
+                ${scoreBar('General AI', s.general_investment, '#eab308')}
+                <div class="text-xs text-gray-600 mb-1 pl-[140px]">Broad AI mentions not tied to cost or revenue (strategy, R&D).</div>
+                <div class="mt-4 bg-gray-800/50 rounded-lg p-3 text-xs text-gray-500 leading-relaxed">
+                    <strong class="text-gray-400">How to read:</strong> 0.0 = no evidence of AI activity.
+                    0.3 = some mentions or early signals.
+                    0.6 = meaningful AI deployment with multiple evidence sources.
+                    1.0 = extensive, multi-dimensional AI capture across filings, products, hiring, and patents.
+                </div>
+            </div>`;
+            h += '</div>';
+
+            // ROI summary
+            h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
+                <h3 class="font-semibold mb-3 text-gray-300">ROI Summary</h3>
+                <p class="text-xs text-gray-500 mb-3">Capture / Opportunity. Values above 1.0x mean the company is capturing more AI value than its structural opportunity suggests.</p>
+                <div class="grid grid-cols-3 gap-6 text-center">
+                    <div>
+                        <div class="text-xs text-gray-500 uppercase mb-1">Cost ROI</div>
+                        <div class="text-2xl font-bold" style="color:${scoreColor(s.cost_roi)}">${fmtRoi(s.cost_roi)}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-500 uppercase mb-1">Revenue ROI</div>
+                        <div class="text-2xl font-bold" style="color:${scoreColor(s.revenue_roi)}">${fmtRoi(s.revenue_roi)}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs text-gray-500 uppercase mb-1">Combined ROI</div>
+                        <div class="text-2xl font-bold" style="color:${scoreColor(s.combined_roi)}">${fmtRoi(s.combined_roi)}</div>
+                    </div>
+                </div>
+                ${s.scored_at ? `<div class="text-xs text-gray-600 text-center mt-3">Scored: ${new Date(s.scored_at).toLocaleString()}</div>` : ''}
+            </div>`;
+
+            // ── Dollar Estimates ──────────────────────────────────────────
+            const fmtDollar = v => {
+                if (v == null || v === 0) return '—';
+                if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+                if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+                if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+                return '$' + v.toFixed(0);
+            };
+
+            if (s.cost_opp_usd != null || s.revenue_opp_usd != null || s.total_investment_usd != null) {
+                h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
+                    <h3 class="font-semibold mb-3 text-gray-300">Dollar Estimates (3-Year Horizon)</h3>
+                    <p class="text-xs text-gray-500 mb-4">Estimated dollar impact of AI initiatives based on company financials, workforce data, and evidence signals.</p>
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
+                        <div>
+                            <div class="text-xs text-gray-500 uppercase mb-1">Cost Opportunity</div>
+                            <div class="text-xl font-bold text-green-400">${fmtDollar(s.cost_opp_usd)}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500 uppercase mb-1">Revenue Opportunity</div>
+                            <div class="text-xl font-bold text-purple-400">${fmtDollar(s.revenue_opp_usd)}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500 uppercase mb-1">Cost Capture</div>
+                            <div class="text-xl font-bold text-green-300">${fmtDollar(s.cost_capture_usd)}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500 uppercase mb-1">Revenue Capture</div>
+                            <div class="text-xl font-bold text-purple-300">${fmtDollar(s.revenue_capture_usd)}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500 uppercase mb-1">Total Investment</div>
+                            <div class="text-xl font-bold text-amber-400">${fmtDollar(s.total_investment_usd)}</div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            // ── Evidence (Valuation Viewer) ────────────────────────────────
+
+            // Valuation viewer — lazy-loaded after DOM render
+            h += '<div id="valuation-section" class="mb-8"><div class="text-center py-8"><div class="loader mx-auto"></div><p class="mt-2 text-gray-500 text-xs">Loading valuations...</p></div></div>';
+
+            // Legacy evidence fallback helpers
+            function evidenceSummary(ev) {
+                const p = ev.payload || {};
+                const d = p.detail || {};
+                const type = ev.evidence_type;
+                const src = ev.source_name || 'Unknown source';
+                const strength = ev.signal_strength || 'unknown';
+                const contrib = ev.score_contribution != null ? ev.score_contribution.toFixed(3) : '?';
+
+                if (type === 'filing_nlp') {
+                    const reasoning = p.reasoning || '';
+                    const excerpt = ev.source_excerpt || '';
+                    const excerptSnip = excerpt.length > 150 ? excerpt.slice(0, 150) + '…' : excerpt;
+                    const timesObserved = p.times_observed || p.filings_found_in;
+                    const corroboration = timesObserved > 1 ? ` <span class="text-blue-400">(corroborated across ${timesObserved} filings)</span>` : '';
+                    const dimLabel = ev.target_dimension === 'cost' ? 'cost reduction' : ev.target_dimension === 'revenue' ? 'revenue generation' : 'AI investment';
+                    return `${strength === 'high' ? 'Strong' : strength === 'medium' ? 'Moderate' : 'Early'} evidence of <strong>${dimLabel}</strong> in SEC filings${corroboration} (${src}).${reasoning ? ' <em>' + reasoning + '</em>' : ''}${excerptSnip ? ' — <span class="text-gray-500">"' + excerptSnip + '"</span>' : ''} Contributing <strong>${contrib}</strong> to the score.`;
+                }
+                if (type === 'job') {
+                    const ratio = p.estimated_ratio != null ? (p.estimated_ratio * 100).toFixed(1) + '%' : '?%';
+                    const method = p.method || 'analysis';
+                    return `An estimated <strong>${ratio} of job postings</strong> are AI/ML-related (via ${method} method from ${src}). This ${strength === 'high' ? 'high' : strength === 'medium' ? 'moderate' : 'low'} hiring signal indicates ${ev.capture_stage === 'invested' ? 'active investment' : ev.capture_stage === 'realized' ? 'realized deployment' : 'planned activity'} in AI talent, contributing <strong>${contrib}</strong> to the score.`;
+                }
+                if (type === 'cost_opportunity') {
+                    const roles = d.workforce_roles || [];
+                    const rolesSummary = roles.length > 0
+                        ? roles.map(r => `<strong>${r.name}</strong> (${(r.ai_applicability * 100).toFixed(0)}% AI-applicable)`).join(', ')
+                        : 'workforce roles';
+                    const empNote = d.employee_count ? `, scaled for <strong>${d.employee_count.toLocaleString()} employees</strong>` : '';
+                    return `This company's workforce includes ${rolesSummary}. Based on BLS occupational data${empNote}, <strong>${(p.cost_opportunity * 100).toFixed(1)}%</strong> of work is AI-automatable — contributing <strong>${contrib}</strong> to cost opportunity.`;
+                }
+                if (type === 'revenue_opportunity') {
+                    const custs = d.customer_industries || [];
+                    if (custs.length > 0) {
+                        const custSummary = custs.map(c => `<strong>${c.industry}</strong> (${(c.avg_ai_applicability * 100).toFixed(0)}% AI-applicable)`).join(', ');
+                        const boostNote = d.b2b_boost ? ` B2B boost applied (${d.b2b_boost}x).` : '';
+                        return `This company serves customers in ${custSummary}. Their workforce AI applicability drives revenue opportunity.${boostNote} Score: <strong>${contrib}</strong>.`;
+                    }
+                    if (d.is_b2b) {
+                        return `As a <strong>B2B ${d.sector || ''}</strong> company, customers have high AI applicability (${d.b2b_boost || 1.3}x boost). Revenue opportunity score: <strong>${contrib}</strong>.`;
+                    }
+                    const roles = d.workforce_roles || [];
+                    if (roles.length > 0) {
+                        const rolesSummary = roles.map(r => `<strong>${r.name}</strong>`).join(', ');
+                        return `Revenue opportunity based on own workforce roles: ${rolesSummary}. Score: <strong>${contrib}</strong>.`;
+                    }
+                    return `Revenue opportunity score: <strong>${contrib}</strong> (${d.reason || src}).`;
+                }
+                if (type === 'patent') {
+                    const count = p.count || p.patent_count || '?';
+                    const timesObserved = p.times_observed || p.filings_found_in;
+                    const corroboration = timesObserved > 1 ? ` <span class="text-blue-400">(observed in ${timesObserved} scoring runs)</span>` : '';
+                    return `<strong>${count} AI-related patent${count !== 1 ? 's' : ''}</strong> found${corroboration} (${src}). Patent filings indicate ${ev.capture_stage === 'invested' ? 'active R&D investment' : 'IP activity'} with ${strength} signal strength, contributing <strong>${contrib}</strong>.`;
+                }
+                if (type === 'product') {
+                    const reasoning = p.reasoning || '';
+                    const excerpt = ev.source_excerpt || '';
+                    const excerptSnip = excerpt.length > 150 ? excerpt.slice(0, 150) + '…' : excerpt;
+                    const stageLabel = ev.capture_stage === 'realized' ? 'deployed and generating value' : ev.capture_stage === 'invested' ? 'in development or recently launched' : 'planned or announced';
+                    const url = p.url ? ` <a href="${p.url}" target="_blank" rel="noopener" class="text-brand-500 hover:text-brand-400 underline">source</a>` : '';
+                    return `AI product/news activity detected (${src})${url}. ${stageLabel.charAt(0).toUpperCase() + stageLabel.slice(1)}.${reasoning ? ' <em>' + reasoning + '</em>' : ''}${excerptSnip ? ' — <span class="text-gray-500">"' + excerptSnip + '"</span>' : ''} Signal: ${strength}, contributing <strong>${contrib}</strong>.`;
+                }
+                // Fallback for unknown types
+                return `${src} reports ${strength} signal for ${ev.target_dimension || 'general'} AI activity (${type}${ev.subtype ? '/' + ev.subtype : ''}), contributing <strong>${contrib}</strong> to the score.`;
+            }
+
+            // Render detailed breakdown for opportunity evidence
+            function opportunityDetailHtml(ev) {
+                const p = ev.payload || {};
+                const d = p.detail || {};
+                if (!d.workforce_roles && !d.customer_industries) return '';
+
+                let html = '';
+
+                // Workforce roles breakdown (cost opportunity)
+                if (d.workforce_roles && d.workforce_roles.length > 0) {
+                    html += `<div class="mt-3">
+                        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Workforce AI Applicability Breakdown</div>
+                        <table class="w-full text-xs">
+                            <thead><tr class="border-b border-gray-800">
+                                <th class="text-left py-1 text-gray-500 font-medium">Occupation Group</th>
+                                <th class="text-right py-1 text-gray-500 font-medium">AI Applicability</th>
+                                <th class="text-left py-1 pl-3 text-gray-500 font-medium" style="width:40%">Impact</th>
+                            </tr></thead><tbody>`;
+                    for (const r of d.workforce_roles) {
+                        const pct = (r.ai_applicability * 100).toFixed(1);
+                        const barColor = r.ai_applicability >= 0.3 ? '#22c55e' : r.ai_applicability >= 0.15 ? '#eab308' : '#ef4444';
+                        html += `<tr class="border-b border-gray-800/50">
+                            <td class="py-1.5 text-gray-300">${r.name}</td>
+                            <td class="py-1.5 text-right font-mono text-gray-300">${pct}%</td>
+                            <td class="py-1.5 pl-3"><div class="h-2 rounded bg-gray-800 overflow-hidden"><div class="h-full rounded" style="width:${Math.min(pct / 0.4, 100)}%;background:${barColor}"></div></div></td>
+                        </tr>`;
+                    }
+                    html += `</tbody></table>`;
+                    if (d.employee_count) {
+                        html += `<div class="text-xs text-gray-500 mt-2">Employee count: <strong class="text-gray-400">${d.employee_count.toLocaleString()}</strong> (scaling factor: ${d.employee_scaling_factor || '1.0'})</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                // Customer industries breakdown (revenue opportunity)
+                if (d.customer_industries && d.customer_industries.length > 0) {
+                    html += `<div class="mt-3">
+                        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Customer Industry AI Applicability</div>
+                        <table class="w-full text-xs">
+                            <thead><tr class="border-b border-gray-800">
+                                <th class="text-left py-1 text-gray-500 font-medium">Customer Industry</th>
+                                <th class="text-right py-1 text-gray-500 font-medium">Avg AI Applicability</th>
+                                <th class="text-left py-1 pl-3 text-gray-500 font-medium">Key Roles</th>
+                            </tr></thead><tbody>`;
+                    for (const c of d.customer_industries) {
+                        const pct = (c.avg_ai_applicability * 100).toFixed(1);
+                        const roleNames = (c.roles || []).map(r => r.name).join(', ');
+                        html += `<tr class="border-b border-gray-800/50">
+                            <td class="py-1.5 text-gray-300">${c.industry}</td>
+                            <td class="py-1.5 text-right font-mono text-gray-300">${pct}%</td>
+                            <td class="py-1.5 pl-3 text-gray-500 text-xs">${roleNames}</td>
+                        </tr>`;
+                    }
+                    html += '</tbody></table>';
+                    if (d.is_b2b && d.b2b_boost) {
+                        html += `<div class="text-xs text-gray-500 mt-2">B2B industry boost: <strong class="text-gray-400">${d.b2b_boost}x</strong> — positioned to sell AI solutions to customers</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                if (d.reason) {
+                    html += `<div class="text-xs text-gray-600 mt-2 italic">${d.reason}</div>`;
+                }
+
+                return html;
+            }
+
+            // Legacy evidence is rendered as fallback inside loadValuations()
+            // Store evidence data for fallback use
+            window._legacyEvidence = evidence;
+
+            // ── Enrichment: GitHub Signals ──────────────────────────────
+            const enrich = data.enrichment || {};
+            if (enrich.github && enrich.github.org_name) {
+                const gh = enrich.github;
+                h += `<div class="mb-6">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                        <div class="p-4 cursor-pointer hover:bg-gray-800/30 transition-colors flex items-center justify-between" onclick="document.getElementById('enrich-github').classList.toggle('hidden')">
+                            <div>
+                                <h3 class="font-semibold text-gray-200">GitHub Signals</h3>
+                                <p class="text-xs text-gray-500 mt-0.5">${gh.org_name} &middot; ${gh.total_repos || 0} repos &middot; ${gh.ai_ml_repos || 0} AI repos &middot; ${(gh.ai_ml_stars || 0).toLocaleString()} AI stars</p>
+                            </div>
+                            <span class="text-xs text-gray-600">click to expand</span>
+                        </div>
+                        <div id="enrich-github" class="hidden border-t border-gray-800 p-4">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">Total Repos</div><div class="text-lg font-bold">${gh.total_repos || 0}</div></div>
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">AI/ML Repos</div><div class="text-lg font-bold text-green-400">${gh.ai_ml_repos || 0}</div></div>
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">Total Stars</div><div class="text-lg font-bold">${(gh.total_stars || 0).toLocaleString()}</div></div>
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">AI Stars</div><div class="text-lg font-bold text-green-400">${(gh.ai_ml_stars || 0).toLocaleString()}</div></div>
+                            </div>
+                            ${gh.top_ai_repos && gh.top_ai_repos.length > 0 ? `
+                                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Top AI Repositories</div>
+                                <div class="space-y-2">
+                                    ${gh.top_ai_repos.map(r => `
+                                        <div class="flex items-center justify-between bg-gray-800/50 rounded-lg px-3 py-2">
+                                            <div>
+                                                <span class="text-sm font-medium text-gray-200">${r.name}</span>
+                                                ${r.language ? `<span class="text-xs text-gray-500 ml-2">${r.language}</span>` : ''}
+                                                ${r.description ? `<div class="text-xs text-gray-500 mt-0.5">${r.description}</div>` : ''}
+                                            </div>
+                                            <span class="text-xs text-yellow-400 font-mono flex-shrink-0 ml-3">${(r.stars || 0).toLocaleString()} stars</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            ` : ''}
+                            ${gh.org_url ? `<a href="${gh.org_url}" target="_blank" rel="noopener" class="text-xs text-brand-500 hover:text-brand-400 underline mt-3 inline-block">View on GitHub &rarr;</a>` : ''}
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            // ── Enrichment: Analyst Consensus ───────────────────────────
+            if (enrich.analysts && (enrich.analysts.recommendation || enrich.analysts.target_mean_price)) {
+                const an = enrich.analysts;
+                const recColor = {'buy': 'text-green-400', 'strong_buy': 'text-green-300', 'hold': 'text-yellow-400', 'sell': 'text-red-400', 'strong_sell': 'text-red-300'};
+                const rec = (an.recommendation || '').toLowerCase().replace(' ', '_');
+                const upside = an.current_price && an.target_mean_price ? (((an.target_mean_price - an.current_price) / an.current_price) * 100).toFixed(1) : null;
+                h += `<div class="mb-6">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                        <div class="p-4 cursor-pointer hover:bg-gray-800/30 transition-colors flex items-center justify-between" onclick="document.getElementById('enrich-analyst').classList.toggle('hidden')">
+                            <div>
+                                <h3 class="font-semibold text-gray-200">Analyst Consensus</h3>
+                                <p class="text-xs text-gray-500 mt-0.5">
+                                    <span class="${recColor[rec] || 'text-gray-400'} font-semibold">${an.recommendation || '—'}</span>
+                                    ${an.target_mean_price ? ` &middot; Target $${an.target_mean_price.toFixed(2)}` : ''}
+                                    ${upside !== null ? ` &middot; <span class="${parseFloat(upside) >= 0 ? 'text-green-400' : 'text-red-400'}">${upside}% upside</span>` : ''}
+                                </p>
+                            </div>
+                            <span class="text-xs text-gray-600">click to expand</span>
+                        </div>
+                        <div id="enrich-analyst" class="hidden border-t border-gray-800 p-4">
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">Recommendation</div><div class="text-lg font-bold ${recColor[rec] || ''}">${an.recommendation || '—'}</div></div>
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">Mean Score</div><div class="text-lg font-bold">${an.recommendation_mean != null ? an.recommendation_mean.toFixed(2) : '—'}</div></div>
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase">Current Price</div><div class="text-lg font-bold">${an.current_price ? '$' + an.current_price.toFixed(2) : '—'}</div></div>
+                                <div class="text-center"><div class="text-xs text-gray-500 uppercase"># Analysts</div><div class="text-lg font-bold">${an.number_of_analyst_opinions || '—'}</div></div>
+                            </div>
+                            ${an.target_low_price || an.target_mean_price || an.target_high_price ? `
+                                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Price Targets</div>
+                                <div class="grid grid-cols-3 gap-4 text-center">
+                                    <div><div class="text-xs text-gray-500">Low</div><div class="text-sm font-bold text-red-400">${an.target_low_price ? '$' + an.target_low_price.toFixed(2) : '—'}</div></div>
+                                    <div><div class="text-xs text-gray-500">Mean</div><div class="text-sm font-bold text-yellow-400">${an.target_mean_price ? '$' + an.target_mean_price.toFixed(2) : '—'}</div></div>
+                                    <div><div class="text-xs text-gray-500">High</div><div class="text-sm font-bold text-green-400">${an.target_high_price ? '$' + an.target_high_price.toFixed(2) : '—'}</div></div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            // ── Enrichment: Web Intelligence ─────────────────────────────
+            if (enrich.web_enrichment && (enrich.web_enrichment.careers || enrich.web_enrichment.investor_relations || enrich.web_enrichment.blog)) {
+                const fc = enrich.web_enrichment;
+                const parts = [];
+                if (fc.careers) parts.push('Careers');
+                if (fc.investor_relations) parts.push('IR');
+                if (fc.blog) parts.push('Blog');
+
+                // Collect all evidence items across page types
+                const allEvidence = [];
+                const pageSummaries = [];
+                const pageLabels = {careers: 'Careers', investor_relations: 'Investor Relations', blog: 'Blog'};
+                for (const [key, label] of Object.entries(pageLabels)) {
+                    const section = fc[key];
+                    if (!section) continue;
+                    if (section.page_summary) pageSummaries.push({label, summary: section.page_summary});
+                    if (section.evidence_items) {
+                        section.evidence_items.forEach(item => allEvidence.push({...item, source_page: label}));
+                    }
+                }
+
+                const dimColors = {cost: 'bg-blue-900/50 text-blue-400', revenue: 'bg-green-900/50 text-green-400', general: 'bg-gray-700 text-gray-400'};
+                const stageColors = {planned: 'bg-yellow-900/50 text-yellow-400', invested: 'bg-orange-900/50 text-orange-400', realized: 'bg-emerald-900/50 text-emerald-400'};
+
+                // Count by dimension
+                const dimCounts = {cost: 0, revenue: 0, general: 0};
+                allEvidence.forEach(e => { dimCounts[e.target_dimension] = (dimCounts[e.target_dimension] || 0) + 1; });
+
+                h += `<div class="mb-6">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                        <div class="p-4 cursor-pointer hover:bg-gray-800/30 transition-colors flex items-center justify-between" onclick="document.getElementById('enrich-web').classList.toggle('hidden')">
+                            <div>
+                                <h3 class="font-semibold text-gray-200">Web Intelligence</h3>
+                                <p class="text-xs text-gray-500 mt-0.5">Web Scrape + Gemini Flash &middot; ${parts.join(', ')} &middot; ${allEvidence.length} evidence items</p>
+                            </div>
+                            <span class="text-xs text-gray-600">click to expand</span>
+                        </div>
+                        <div id="enrich-web" class="hidden border-t border-gray-800 p-4 space-y-4">`;
+
+                // Summary stats
+                h += `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                    <div class="text-center bg-gray-800/50 rounded-lg p-2"><div class="text-xs text-gray-500">Total Evidence</div><div class="font-bold">${allEvidence.length}</div></div>
+                    <div class="text-center bg-gray-800/50 rounded-lg p-2"><div class="text-xs text-gray-500">Cost</div><div class="font-bold text-blue-400">${dimCounts.cost}</div></div>
+                    <div class="text-center bg-gray-800/50 rounded-lg p-2"><div class="text-xs text-gray-500">Revenue</div><div class="font-bold text-green-400">${dimCounts.revenue}</div></div>
+                    <div class="text-center bg-gray-800/50 rounded-lg p-2"><div class="text-xs text-gray-500">General</div><div class="font-bold text-gray-400">${dimCounts.general}</div></div>
+                </div>`;
+
+                // Page summaries
+                if (pageSummaries.length > 0) {
+                    pageSummaries.forEach(ps => {
+                        h += `<div class="mb-2">
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">${ps.label}</div>
+                            <p class="text-xs text-gray-400">${ps.summary}</p>
+                        </div>`;
+                    });
+                }
+
+                // Evidence items
+                if (allEvidence.length > 0) {
+                    h += `<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Evidence Items</div>
+                    <div class="space-y-2">`;
+                    allEvidence.forEach(ev => {
+                        const conf = ev.confidence != null ? (ev.confidence * 100).toFixed(0) + '%' : '—';
+                        h += `<div class="bg-gray-800/50 rounded-lg p-3">
+                            <div class="flex flex-wrap items-center gap-2 mb-1">
+                                <span class="px-2 py-0.5 rounded text-xs font-semibold ${dimColors[ev.target_dimension] || dimColors.general}">${ev.target_dimension}</span>
+                                <span class="px-2 py-0.5 rounded text-xs font-semibold ${stageColors[ev.capture_stage] || stageColors.invested}">${ev.capture_stage}</span>
+                                <span class="text-xs text-gray-500">${ev.source_page}</span>
+                                <span class="text-xs text-gray-600 ml-auto">${conf} confidence</span>
+                            </div>
+                            <p class="text-xs text-gray-300">${ev.passage_text}</p>
+                            ${ev.reasoning ? `<p class="text-xs text-gray-500 mt-1 italic">${ev.reasoning}</p>` : ''}
+                        </div>`;
+                    });
+                    h += `</div>`;
+                }
+
+                h += `</div></div></div>`;
+            }
+
+            // ── Peers ────────────────────────────────────────────────────
+            if (peers.length > 1) {
+                h += `<div class="mb-8">
+                    <h3 class="text-xl font-bold mb-4">Industry Peers — ${data.industry || 'N/A'}</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead><tr class="border-b border-gray-700">
+                                <th class="py-2 px-3 text-xs text-gray-400">Ticker</th>
+                                <th class="py-2 px-3 text-xs text-gray-400">Company</th>
+                                <th class="py-2 px-3 text-xs text-gray-400">Cost Cap</th>
+                                <th class="py-2 px-3 text-xs text-gray-400">Rev Cap</th>
+                                <th class="py-2 px-3 text-xs text-gray-400">Cost ROI</th>
+                                <th class="py-2 px-3 text-xs text-gray-400">Rev ROI</th>
+                                <th class="py-2 px-3 text-xs text-gray-400">Quadrant</th>
+                            </tr></thead>
+                            <tbody>${peers.map(p => `
+                                <tr class="border-b border-gray-800 ${p.ticker === TICKER ? 'bg-brand-900/20' : ''} cursor-pointer hover:bg-gray-800/50" onclick="window.open('/company/${p.ticker}?token=${AUTH_TOKEN}','_blank')">
+                                    <td class="py-2 px-3 font-semibold ${p.ticker === TICKER ? 'text-brand-400' : 'text-brand-500'}">${p.ticker}</td>
+                                    <td class="py-2 px-3 text-xs">${p.company_name || '—'}</td>
+                                    <td class="py-2 px-3 font-mono text-xs">${fmtScore(p.cost_capture_score)}</td>
+                                    <td class="py-2 px-3 font-mono text-xs">${fmtScore(p.revenue_capture_score)}</td>
+                                    <td class="py-2 px-3 font-mono text-xs">${fmtRoi(p.cost_roi)}</td>
+                                    <td class="py-2 px-3 font-mono text-xs">${fmtRoi(p.revenue_roi)}</td>
+                                    <td class="py-2 px-3"><span class="px-2 py-1 rounded text-xs ${quadrantBadgeClass(p.quadrant)}">${p.quadrant_label || '—'}</span></td>
+                                </tr>
+                            `).join('')}</tbody>
+                        </table>
+                    </div>
+                </div>`;
+            }
+
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('content').classList.remove('hidden');
+            document.getElementById('content').innerHTML = h;
+
+            // Now that DOM is rendered, load valuations into the section
+            loadValuations(TICKER);
+
+        } catch (e) {
+            document.getElementById('loading').innerHTML = `<p class="text-red-400">Error loading profile: ${e.message}</p>`;
+        }
+    }
+
+    function quadrantBadgeClass(q) {
+        const cls = {
+            'high_opp_high_real': 'bg-green-900/50 text-green-400',
+            'high_opp_low_real': 'bg-yellow-900/50 text-yellow-400',
+            'low_opp_high_real': 'bg-blue-900/50 text-blue-400',
+            'low_opp_low_real': 'bg-gray-800 text-gray-400',
+        };
+        return cls[q] || 'bg-gray-800 text-gray-400';
+    }
+
+    async function requestRefresh() {
+        try {
+            const res = await fetch(`/api/companies/${TICKER}/refresh?token=${AUTH_TOKEN}`, { method: 'POST' });
+            const data = await res.json();
+            alert(data.ok ? data.message : (data.error || 'Refresh request failed.'));
+        } catch (e) {
+            alert('Failed to request refresh.');
+        }
+    }
+
+    // ── Valuation Viewer ────────────────────────────────────────────────
+    const typeBadgeColors = { plan: 'bg-blue-900/50 text-blue-400 border-blue-800', investment: 'bg-amber-900/50 text-amber-400 border-amber-800', capture: 'bg-green-900/50 text-green-400 border-green-800' };
+    const dimTabColors = { cost: 'border-green-500 text-green-400', revenue: 'border-purple-500 text-purple-400', general: 'border-yellow-500 text-yellow-400' };
+    const dimTabBg = { cost: 'bg-green-900/20', revenue: 'bg-purple-900/20', general: 'bg-yellow-900/20' };
+
+    function factorBar(label, value, maxVal) {
+        const pct = maxVal > 0 ? Math.min((value / maxVal) * 100, 100) : 0;
+        const color = value >= 0.7 ? '#22c55e' : value >= 0.4 ? '#eab308' : '#ef4444';
+        return `<div class="flex items-center gap-2 text-xs">
+            <span class="text-gray-500 w-20 flex-shrink-0">${label}</span>
+            <div class="flex-1 h-2 bg-gray-800 rounded overflow-hidden"><div class="h-full rounded" style="width:${pct}%;background:${color}"></div></div>
+            <span class="font-mono text-gray-400 w-10 text-right">${value != null ? value.toFixed(2) : '—'}</span>
+        </div>`;
+    }
+
+    async function loadValuations(ticker) {
+        const container = document.getElementById('valuation-section');
+        if (!container) { console.error('valuation-section not found'); return; }
+
+        try {
+            console.log('[val] fetching...');
+            const resp = await fetch(`/api/companies/${ticker}/valuations`);
+            const vData = await resp.json();
+            console.log('[val] got data, keys:', Object.keys(vData));
+
+            if (vData.error || !vData.dimensions) {
+                // Fallback to legacy evidence
+                renderLegacyEvidence(container);
+                return;
+            }
+
+            let vh = '';
+
+            // 1. Pipeline Summary Bar
+            const tc = vData.type_counts || {};
+            const dimKeys = Object.keys(vData.dimensions);
+            vh += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+                <div class="flex items-center justify-between flex-wrap gap-3">
+                    <div class="flex items-center gap-2 text-sm">
+                        <span class="font-semibold text-gray-200">Evidence Valuations</span>
+                        <span class="text-gray-500">|</span>
+                        <span class="text-gray-400">${vData.total_passages} passages</span>
+                        <span class="text-gray-600">&rarr;</span>
+                        <span class="text-gray-400">${vData.total_groups} groups</span>
+                        <span class="text-gray-600">&rarr;</span>
+                        <span class="text-gray-400">${dimKeys.length} dimensions</span>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs">
+                        ${tc.plan ? `<span class="px-2 py-0.5 rounded border ${typeBadgeColors.plan}">${tc.plan} plan</span>` : ''}
+                        ${tc.investment ? `<span class="px-2 py-0.5 rounded border ${typeBadgeColors.investment}">${tc.investment} investment</span>` : ''}
+                        ${tc.capture ? `<span class="px-2 py-0.5 rounded border ${typeBadgeColors.capture}">${tc.capture} capture</span>` : ''}
+                    </div>
+                </div>
+            </div>`;
+
+            // 2. Dimension Tabs
+            const orderedDims = ['cost', 'revenue', 'general'].filter(d => vData.dimensions[d]);
+            // Add any other dimensions
+            dimKeys.forEach(d => { if (!orderedDims.includes(d)) orderedDims.push(d); });
+
+            vh += `<div class="mb-4">
+                <div class="flex gap-2 border-b border-gray-800 pb-0" id="dim-tabs">`;
+            orderedDims.forEach((dim, i) => {
+                const dd = vData.dimensions[dim];
+                const active = i === 0;
+                const tabColor = dimTabColors[dim] || 'border-gray-500 text-gray-400';
+                const tabBg = active ? (dimTabBg[dim] || 'bg-gray-800/30') : '';
+                vh += `<button class="px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${active ? tabColor + ' ' + tabBg : 'border-transparent text-gray-500 hover:text-gray-300'}" data-dim="${dim}" onclick="switchDimTab('${dim}')">
+                    ${dim.charAt(0).toUpperCase() + dim.slice(1)}
+                    <span class="ml-2 text-xs font-mono ${active ? '' : 'text-gray-600'}">${dd.dimension_score != null ? dd.dimension_score.toFixed(2) : '—'}</span>
+                    ${dd.potential_usd > 0 ? `<span class="ml-1 text-xs text-gray-500">${fmtMoney(dd.potential_usd)}</span>` : ''}
+                </button>`;
+            });
+            vh += `</div></div>`;
+
+            // 3. Dimension content panels
+            orderedDims.forEach((dim, i) => {
+                const dd = vData.dimensions[dim];
+                const groups = dd.groups || [];
+                // Sort by factor_score desc
+                groups.sort((a, b) => ((b.valuation?.factor_score) || 0) - ((a.valuation?.factor_score) || 0));
+
+                vh += `<div class="dim-panel ${i === 0 ? '' : 'hidden'}" id="dim-panel-${dim}">`;
+
+                // Dimension summary
+                vh += `<div class="grid grid-cols-3 gap-4 mb-4">
+                    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
+                        <div class="text-xs text-gray-500 uppercase">Dimension Score</div>
+                        <div class="text-xl font-bold mt-1" style="color:${scoreColor(dd.dimension_score)}">${dd.dimension_score != null ? dd.dimension_score.toFixed(3) : '—'}</div>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
+                        <div class="text-xs text-gray-500 uppercase">Potential (High)</div>
+                        <div class="text-xl font-bold mt-1 text-amber-400">${fmtMoney(dd.potential_usd)}</div>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
+                        <div class="text-xs text-gray-500 uppercase">Mid Estimate</div>
+                        <div class="text-xl font-bold mt-1 text-amber-300">${fmtMoney(dd.actual_usd)}</div>
+                    </div>
+                </div>`;
+
+                // Group cards
+                vh += `<div class="space-y-3">`;
+                for (const g of groups) {
+                    const v = g.valuation;
+                    const gId = `vg-${g.id}`;
+                    const typeBadge = v ? typeBadgeColors[v.evidence_type] || 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-800 text-gray-400 border-gray-700';
+                    const narrativeSnip = v?.narrative ? (v.narrative.length > 120 ? v.narrative.slice(0, 120) + '...' : v.narrative) : (g.representative_text || '—');
+                    const dollarRange = v && v.dollar_low != null && v.dollar_high != null ? `${fmtMoney(v.dollar_low)} – ${fmtMoney(v.dollar_high)}` : '—';
+                    const fs = v?.factor_score;
+
+                    // Build date info for summary
+                    const srcLabel = g.source_types?.length ? g.source_types.join(', ') : '';
+                    const pubDate = g.date_earliest || g.passages?.[0]?.source_date || null;
+                    const scrapedAt = g.grouped_at ? new Date(g.grouped_at).toLocaleString() : null;
+
+                    vh += `<div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                        <!-- Summary row -->
+                        <div class="p-4 cursor-pointer hover:bg-gray-800/30 transition-colors" onclick="document.getElementById('${gId}').classList.toggle('hidden')">
+                            <div class="flex items-start justify-between gap-4">
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2 flex-wrap mb-1.5">
+                                        ${v ? `<span class="text-xs px-2 py-0.5 rounded border ${typeBadge}">${v.evidence_type}</span>` : ''}
+                                        <span class="text-xs text-gray-500">${g.passage_count || 0} passage${(g.passage_count || 0) !== 1 ? 's' : ''}</span>
+                                        ${srcLabel ? `<span class="text-xs text-gray-600">src: ${srcLabel}</span>` : ''}
+                                        ${pubDate ? `<span class="text-xs text-gray-600">pub: ${pubDate}</span>` : ''}
+                                        ${scrapedAt ? `<span class="text-xs text-gray-700">scraped: ${scrapedAt}</span>` : ''}
+                                        <span class="text-xs text-gray-600 ml-auto">click to expand</span>
+                                    </div>
+                                    <div class="text-sm text-gray-300 leading-relaxed">${narrativeSnip}</div>
+                                </div>
+                                <div class="text-right flex-shrink-0 space-y-1">
+                                    ${fs != null ? `<div class="font-mono text-lg font-bold" style="color:${scoreColor(fs)}">${fs.toFixed(3)}</div><div class="text-xs text-gray-600">factor score</div>` : ''}
+                                    ${dollarRange !== '—' ? `<div class="text-xs text-amber-400 font-mono">${dollarRange}</div>` : ''}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Expanded detail -->
+                        <div id="${gId}" class="hidden border-t border-gray-800 bg-gray-950/50 p-4 space-y-4">`;
+
+                    // Factor score decomposition
+                    if (v && v.specificity != null) {
+                        vh += `<div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Factor Score Decomposition</div>
+                            <div class="space-y-1.5">
+                                ${factorBar('Specificity', v.specificity, 1)}
+                                ${factorBar('Magnitude', v.magnitude, 1)}
+                                ${factorBar('Stage Weight', v.stage_weight, 1)}
+                                ${factorBar('Recency', v.recency, 1)}
+                            </div>
+                            <div class="text-xs text-gray-500 mt-2">
+                                ${v.specificity?.toFixed(2)} × ${v.magnitude?.toFixed(2)} × ${v.stage_weight?.toFixed(2)} × ${v.recency?.toFixed(2)} = <span class="font-bold text-gray-300">${fs?.toFixed(3)}</span>
+                            </div>
+                        </div>`;
+                    }
+
+                    // Dollar range
+                    if (v && (v.dollar_low != null || v.dollar_rationale)) {
+                        vh += `<div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Dollar Range</div>
+                            ${v.dollar_low != null ? `<div class="flex items-center gap-3 text-sm">
+                                <span class="text-gray-500">Low:</span> <span class="font-mono text-gray-300">${fmtMoney(v.dollar_low)}</span>
+                                <span class="text-gray-500">Mid:</span> <span class="font-mono text-amber-300">${fmtMoney(v.dollar_mid)}</span>
+                                <span class="text-gray-500">High:</span> <span class="font-mono text-gray-300">${fmtMoney(v.dollar_high)}</span>
+                            </div>` : ''}
+                            ${v.dollar_rationale ? `<div class="text-xs text-gray-500 mt-1 italic">${v.dollar_rationale}</div>` : ''}
+                        </div>`;
+                    }
+
+                    // Type-specific panel
+                    if (v?.type_detail) {
+                        const td = v.type_detail;
+                        vh += `<div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">${v.evidence_type.charAt(0).toUpperCase() + v.evidence_type.slice(1)} Details</div>
+                            <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">`;
+
+                        if (v.evidence_type === 'plan') {
+                            vh += `
+                                <div><span class="text-gray-500">Timeframe:</span> <span class="text-gray-300">${td.timeframe || '—'}</span></div>
+                                <div><span class="text-gray-500">Probability:</span> <span class="text-gray-300">${td.probability != null ? (td.probability * 100).toFixed(0) + '%' : '—'}</span></div>
+                                <div class="col-span-2"><span class="text-gray-500">Rationale:</span> <span class="text-gray-300">${td.strategic_rationale || '—'}</span></div>
+                                <div><span class="text-gray-500">Yr 1:</span> <span class="text-gray-300">${td.year_1_pct != null ? (td.year_1_pct * 100).toFixed(0) + '%' : '—'}</span></div>
+                                <div><span class="text-gray-500">Yr 2:</span> <span class="text-gray-300">${td.year_2_pct != null ? (td.year_2_pct * 100).toFixed(0) + '%' : '—'}</span></div>`;
+                        } else if (v.evidence_type === 'investment') {
+                            vh += `
+                                <div><span class="text-gray-500">Actual Spend:</span> <span class="text-gray-300">${td.actual_spend_usd != null ? fmtMoney(td.actual_spend_usd) : '—'}</span></div>
+                                <div><span class="text-gray-500">Completion:</span> <span class="text-gray-300">${td.completion_pct != null ? (td.completion_pct * 100).toFixed(0) + '%' : '—'}</span></div>
+                                <div><span class="text-gray-500">Scope:</span> <span class="text-gray-300">${td.deployment_scope || '—'}</span></div>
+                                <div><span class="text-gray-500">Tech Area:</span> <span class="text-gray-300">${td.technology_area || '—'}</span></div>
+                                <div><span class="text-gray-500">Vendor:</span> <span class="text-gray-300">${td.vendor_partner || '—'}</span></div>
+                                <div><span class="text-gray-500">Yr 1:</span> <span class="text-gray-300">${td.year_1_pct != null ? (td.year_1_pct * 100).toFixed(0) + '%' : '—'}</span></div>`;
+                        } else if (v.evidence_type === 'capture') {
+                            vh += `
+                                <div><span class="text-gray-500">Metric:</span> <span class="text-gray-300">${td.metric_name || '—'}</span></div>
+                                <div><span class="text-gray-500">Period:</span> <span class="text-gray-300">${td.measurement_period || '—'}</span></div>
+                                <div><span class="text-gray-500">Before:</span> <span class="text-gray-300">${td.metric_value_before || '—'}</span></div>
+                                <div><span class="text-gray-500">After:</span> <span class="text-gray-300">${td.metric_value_after || '—'}</span></div>
+                                <div><span class="text-gray-500">Delta:</span> <span class="text-gray-300">${td.metric_delta || '—'}</span></div>
+                                <div><span class="text-gray-500">Dollar Impact:</span> <span class="text-amber-400">${td.measured_dollar_impact != null ? fmtMoney(td.measured_dollar_impact) : '—'}</span></div>`;
+                        }
+                        vh += `</div></div>`;
+                    }
+
+                    // Source passages (collapsible)
+                    if (g.passages && g.passages.length > 0) {
+                        const pId = `vp-${g.id}`;
+                        vh += `<div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1 cursor-pointer hover:text-gray-400" onclick="document.getElementById('${pId}').classList.toggle('hidden')">
+                                Source Passages (${g.passages.length}) <span class="text-gray-600">&#9662;</span>
+                            </div>
+                            <div id="${pId}" class="hidden space-y-2 mt-2">`;
+                        for (const p of g.passages) {
+                            const pScraped = p.scraped_at ? new Date(p.scraped_at).toLocaleString() : null;
+                            vh += `<div class="bg-gray-800/50 rounded p-3 border border-gray-800">
+                                <div class="text-xs text-gray-400 italic leading-relaxed">"${p.passage_text}"</div>
+                                <div class="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-600">
+                                    ${p.source_type ? `<span><span class="text-gray-500">source:</span> ${p.source_type}</span>` : ''}
+                                    ${p.source_author ? `<span><span class="text-gray-500">publisher:</span> <span class="text-gray-400">${p.source_author}</span></span>` : ''}
+                                    ${p.source_url ? `<span><a href="${p.source_url}" target="_blank" rel="noopener" class="text-brand-500 hover:text-brand-400 underline">source link</a></span>` : ''}
+                                    ${p.source_filename ? `<span><span class="text-gray-500">file:</span> ${p.source_filename}</span>` : ''}
+                                    ${p.source_date ? `<span><span class="text-gray-500">published:</span> ${p.source_date}</span>` : ''}
+                                    ${pScraped ? `<span><span class="text-gray-500">scraped:</span> ${pScraped}</span>` : ''}
+                                    ${p.confidence != null ? `<span><span class="text-gray-500">conf:</span> ${(p.confidence * 100).toFixed(0)}%</span>` : ''}
+                                    ${p.capture_stage ? `<span class="px-1.5 py-0.5 rounded bg-gray-700">${p.capture_stage}</span>` : ''}
+                                </div>
+                                ${p.reasoning ? `<div class="text-xs text-gray-500 mt-1">${p.reasoning}</div>` : ''}
+                            </div>`;
+                        }
+                        vh += `</div></div>`;
+                    }
+
+                    // Adjustment callout
+                    if (v?.adjusted_from_preliminary) {
+                        vh += `<div class="bg-yellow-900/20 border border-yellow-800/50 rounded-lg p-3 text-xs">
+                            <span class="font-semibold text-yellow-400">Adjusted from preliminary:</span>
+                            <span class="text-yellow-300/80 ml-1">${v.adjustment_reason || 'Revised during cross-group analysis'}</span>
+                        </div>`;
+                    }
+
+                    // Discrepancy callout
+                    if (g.discrepancies && g.discrepancies.length > 0) {
+                        for (const disc of g.discrepancies) {
+                            vh += `<div class="bg-red-900/20 border border-red-800/50 rounded-lg p-3 text-xs">
+                                <span class="font-semibold text-red-400">Discrepancy:</span>
+                                <span class="text-red-300/80 ml-1">${disc.description}</span>
+                                ${disc.resolution ? `<div class="mt-1 text-gray-400"><span class="text-gray-500">Resolution:</span> ${disc.resolution}</div>` : ''}
+                            </div>`;
+                        }
+                    }
+
+                    // Metadata footer
+                    const valuedAt = v?.valued_at ? new Date(v.valued_at).toLocaleString() : null;
+                    vh += `<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-700 border-t border-gray-800/50 pt-2 mt-2">
+                        ${srcLabel ? `<span>Source: ${srcLabel}</span>` : ''}
+                        ${pubDate ? `<span>Published: ${pubDate}</span>` : ''}
+                        ${scrapedAt ? `<span>Scraped: ${scrapedAt}</span>` : ''}
+                        ${valuedAt ? `<span>Valued: ${valuedAt}</span>` : ''}
+                        <span>Group #${g.id}</span>
+                    </div>`;
+
+                    vh += `</div></div>`;
+                }
+                vh += `</div></div>`;
+            });
+
+            console.log('[val] setting innerHTML, length:', vh.length);
+            container.innerHTML = vh;
+            console.log('[val] done!');
+
+        } catch (e) {
+            console.error('Failed to load valuations:', e);
+            const errHtml = `<div class="bg-red-900/30 border border-red-800 rounded-xl p-4 mb-4 text-sm text-red-300">
+                <strong>Valuation viewer error:</strong> ${e.message}
+                <pre class="text-xs mt-2 text-red-400 whitespace-pre-wrap">${e.stack}</pre>
+            </div>`;
+            container.insertAdjacentHTML('afterbegin', errHtml);
+            renderLegacyEvidence(container);
+        }
+    }
+
+    function switchDimTab(dim) {
+        // Update tab buttons
+        document.querySelectorAll('#dim-tabs button').forEach(btn => {
+            const btnDim = btn.dataset.dim;
+            const isActive = btnDim === dim;
+            const tabColor = dimTabColors[btnDim] || 'border-gray-500 text-gray-400';
+            const tabBg = dimTabBg[btnDim] || 'bg-gray-800/30';
+            if (isActive) {
+                btn.className = `px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tabColor} ${tabBg}`;
+            } else {
+                btn.className = 'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors border-transparent text-gray-500 hover:text-gray-300';
+            }
+        });
+        // Show/hide panels
+        document.querySelectorAll('.dim-panel').forEach(p => {
+            p.classList.toggle('hidden', p.id !== `dim-panel-${dim}`);
+        });
+    }
+
+    function renderLegacyEvidence(container) {
+        const evidence = window._legacyEvidence || {};
+        const evTypes = Object.keys(evidence);
+        if (evTypes.length === 0) {
+            container.insertAdjacentHTML('beforeend', '<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8 text-center text-gray-500">No evidence items yet. Run scoring with more data sources to populate.</div>');
+            return;
+        }
+
+        const allEvidence = [];
+        evTypes.forEach(type => {
+            (evidence[type] || []).forEach(ev => {
+                allEvidence.push({ ...ev, evidence_type: type });
+            });
+        });
+        allEvidence.sort((a, b) => (b.score_contribution || 0) - (a.score_contribution || 0));
+
+        let h = '<div class="mb-8"><h3 class="text-xl font-bold mb-4">Evidence (Legacy)</h3>';
+        h += '<div class="space-y-2">';
+        for (const ev of allEvidence.slice(0, 30)) {
+            const dim = ev.target_dimension || 'general';
+            const stageClass = stageColors[ev.capture_stage] || 'bg-gray-800 text-gray-400';
+            h += `<div class="bg-gray-900 border-l-4 ${dimColors[dim] || 'border-gray-600'} rounded-r-lg p-4">
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                    <span class="text-sm font-medium text-gray-200">${ev.evidence_type}${ev.subtype && ev.subtype !== ev.evidence_type ? ' / ' + ev.subtype : ''}</span>
+                    ${ev.capture_stage ? `<span class="text-xs px-2 py-0.5 rounded ${stageClass}">${ev.capture_stage}</span>` : ''}
+                    ${ev.score_contribution != null ? `<span class="ml-auto font-mono text-xs" style="color:${scoreColor(ev.score_contribution)}">${ev.score_contribution.toFixed(3)}</span>` : ''}
+                </div>
+                <div class="text-xs text-gray-400">${ev.source_name || '—'} ${ev.source_excerpt ? '— "' + (ev.source_excerpt.length > 150 ? ev.source_excerpt.slice(0, 150) + '...' : ev.source_excerpt) + '"' : ''}</div>
+            </div>`;
+        }
+        if (allEvidence.length > 30) {
+            h += `<p class="text-xs text-gray-500 pl-4">...and ${allEvidence.length - 30} more items</p>`;
+        }
+        h += '</div></div>';
+        container.insertAdjacentHTML('beforeend', h);
+    }
+
+    load();
+    </script>
+</body>
+</html>

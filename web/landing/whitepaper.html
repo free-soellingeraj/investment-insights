@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Opportunity Index — Technical Whitepaper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-950 text-gray-100 antialiased">
+
+    <!-- Nav -->
+    <nav class="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
+        <div class="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <a href="/" class="flex items-center gap-3 hover:opacity-80 transition">
+                    <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center font-bold text-sm">AI</div>
+                    <span class="text-lg font-semibold">AI Opportunity Index</span>
+                </a>
+                <span class="text-xs text-gray-500 ml-2">Whitepaper</span>
+            </div>
+            <a href="/" class="text-gray-400 hover:text-white text-sm">Back to Home</a>
+        </div>
+    </nav>
+
+    <!-- Content -->
+    <article class="pt-28 pb-20 max-w-4xl mx-auto px-6">
+
+        <header class="mb-16 text-center">
+            <p class="text-brand-500 text-sm font-medium uppercase tracking-wide mb-3">Technical Whitepaper</p>
+            <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-6">
+                The AI Opportunity Index:<br>A 4-Value Scoring Framework
+            </h1>
+            <p class="text-lg text-gray-400 max-w-2xl mx-auto mb-6">
+                A systematic methodology for evaluating public companies' AI potential and execution across cost and revenue dimensions.
+            </p>
+            <div class="flex justify-center gap-6 text-sm text-gray-500">
+                <span>Winona Quantitative Research</span>
+                <span>|</span>
+                <span>February 2026</span>
+            </div>
+        </header>
+
+        <div class="prose prose-invert max-w-none space-y-12">
+
+            <!-- Abstract -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">Abstract</h2>
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 text-gray-300 leading-relaxed">
+                    <p>The AI Opportunity Index quantifies how much artificial intelligence could impact a public company and how effectively that company is capturing that opportunity. Unlike consensus AI rankings that rely on a single composite score, our framework decomposes AI exposure into four independent values: <em>Cost Opportunity</em>, <em>Cost Capture</em>, <em>Revenue Opportunity</em>, and <em>Revenue Capture</em>. Each is derived from distinct public data sources and scored independently, enabling nuanced comparisons that distinguish between structural potential and demonstrated execution. A fifth tracked value, <em>General AI Investment</em>, captures broad AI commitments that are not specifically targeted at cost or revenue outcomes, preventing unverifiable announcements from inflating capture scores.</p>
+                </div>
+            </section>
+
+            <!-- 1. Motivation -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">1. Motivation</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Most AI investment frameworks suffer from two fundamental problems. First, they blend potential and execution into a single number, making it impossible to distinguish a company with enormous untapped AI potential from one that has already captured it. Second, they mix cost-side and revenue-side effects, obscuring whether a company benefits from AI through internal efficiency or through selling AI-powered products.
+                </p>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The AI Opportunity Index addresses both problems by scoring every company on a 2x2 matrix: Cost vs. Revenue on one axis, Opportunity (structural potential) vs. Capture (demonstrated execution) on the other. This produces four scores per company, plus derived ROI metrics that reveal whether a company is over-investing, under-investing, or efficiently converting its AI opportunity into realized value.
+                </p>
+                <p class="text-gray-300 leading-relaxed">
+                    The framework is designed around a principle we call <em>honest classification</em>: when a company announces a "$2B AI investment" without specifying whether it targets cost reduction or revenue growth, we classify that as General AI Investment rather than artificially splitting it across dimensions. This prevents vague announcements from inflating capture scores and keeps the four core values clean and verifiable.
+                </p>
+            </section>
+
+            <!-- 2. Framework Overview -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">2. Framework Overview</h2>
+
+                <div class="grid md:grid-cols-2 gap-6 mb-8">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                        <h3 class="text-lg font-semibold text-blue-400 mb-3">Opportunity Dimension</h3>
+                        <p class="text-sm text-gray-400 mb-3">Measures structural AI potential based on industry composition, workforce characteristics, and customer base.</p>
+                        <ul class="text-sm text-gray-400 space-y-2">
+                            <li><strong class="text-gray-300">Cost Opportunity:</strong> How automatable is this company's workforce? Derived from occupation-level AI applicability scores mapped through industry-occupation matrices.</li>
+                            <li><strong class="text-gray-300">Revenue Opportunity:</strong> Can this company sell AI to its customers? Derived from customer industry AI applicability and B2B positioning.</li>
+                        </ul>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                        <h3 class="text-lg font-semibold text-green-400 mb-3">Capture Dimension</h3>
+                        <p class="text-sm text-gray-400 mb-3">Measures demonstrated AI execution from four independent signal sources, each classified by target and stage.</p>
+                        <ul class="text-sm text-gray-400 space-y-2">
+                            <li><strong class="text-gray-300">Cost Capture:</strong> Aggregated from cost-targeted evidence across all sub-scorers (automation patents, MLOps hiring, efficiency-related filing language).</li>
+                            <li><strong class="text-gray-300">Revenue Capture:</strong> Aggregated from revenue-targeted evidence (AI product launches, product-facing patents, AI product manager hiring).</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
+                    <h3 class="text-lg font-semibold text-amber-400 mb-3">General AI Investment (5th Value)</h3>
+                    <p class="text-sm text-gray-400">Broad AI investment announcements that do not specify cost or revenue focus. Tracked as a separate metric to provide a measure of total AI commitment, but explicitly excluded from Cost Capture and Revenue Capture calculations. This prevents companies from inflating their capture scores with unverifiable general announcements.</p>
+                </div>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">Derived Metrics</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    From the four core values, we derive ROI metrics that measure capital efficiency:
+                </p>
+                <ul class="text-gray-300 space-y-2 ml-6 list-disc">
+                    <li><strong>Cost ROI</strong> = Cost Capture / Cost Opportunity (capped to prevent extreme values when opportunity is near zero)</li>
+                    <li><strong>Revenue ROI</strong> = Revenue Capture / Revenue Opportunity (similarly capped)</li>
+                    <li><strong>Combined ROI</strong> = Weighted average of Cost ROI and Revenue ROI</li>
+                </ul>
+                <p class="text-gray-400 text-sm mt-4">
+                    Companies with ROI > 1.0 are capturing more than their structural opportunity suggests, indicating aggressive AI execution. Companies with ROI near 0 have significant untapped potential.
+                </p>
+            </section>
+
+            <!-- 3. Opportunity Scoring -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">3. Opportunity Scoring</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The opportunity dimension estimates structural AI potential independent of any company actions. It answers: "Given this company's industry, workforce, and customer base, how much value could AI create?"
+                </p>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">3.1 Data Sources</h3>
+                <ul class="text-gray-300 space-y-2 ml-6 list-disc mb-6">
+                    <li><strong>BLS Occupation-Industry Matrix:</strong> Maps industries to their workforce composition by Standard Occupation Classification (SOC) groups.</li>
+                    <li><strong>Microsoft AI Applicability Scores:</strong> Per-occupation AI applicability ratings from academic research, providing a granular estimate of how much each job function can be augmented or automated by AI.</li>
+                    <li><strong>SIC/NAICS Industry Codes:</strong> Map each company to its industry classification, enabling workforce composition estimation.</li>
+                    <li><strong>Yahoo Finance Sector/Industry:</strong> Fallback classification when SIC codes are unavailable, with sector-specific AI profiles.</li>
+                </ul>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">3.2 Cost Opportunity</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Cost Opportunity measures how much AI could reduce a company's internal operating costs. The score is derived by mapping the company's industry to its typical occupation mix, then computing the weighted average AI applicability of those occupations. Employee count provides a scaling factor: larger workforces represent more absolute savings potential.
+                </p>
+                <p class="text-gray-400 text-sm mb-6">
+                    The raw applicability average is normalized to a 0-1 scale with bounds calibrated to the empirical distribution of scores across all industries.
+                </p>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">3.3 Revenue Opportunity</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Revenue Opportunity measures how much AI could grow a company's top line. For B2B companies, this is primarily about selling AI solutions to customers. The score is derived from the AI applicability of customer industries (e.g., a software company selling to financial services evaluates how much financial services workers could benefit from AI). B2B technology and services companies receive a positioning boost, reflecting their structural advantage in packaging AI capabilities as products.
+                </p>
+                <p class="text-gray-300 leading-relaxed">
+                    For non-B2B companies, revenue opportunity reflects the potential to embed AI in consumer-facing products and services, scored more conservatively.
+                </p>
+            </section>
+
+            <!-- 4. Capture Scoring -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">4. Capture Scoring</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The capture dimension measures what a company is actually doing with AI. It aggregates evidence from four independent sub-scorers, each contributing a weighted share to the final capture scores.
+                </p>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">4.1 Evidence Classification</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Every piece of evidence produced by any sub-scorer is classified on two independent axes before aggregation:
+                </p>
+                <div class="grid md:grid-cols-2 gap-6 mb-6">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                        <h4 class="font-semibold text-gray-200 mb-2">Target Dimension</h4>
+                        <ul class="text-sm text-gray-400 space-y-1">
+                            <li><strong class="text-green-400">Cost:</strong> Evidence of AI used to reduce internal costs (automation, efficiency, process optimization)</li>
+                            <li><strong class="text-blue-400">Revenue:</strong> Evidence of AI used to generate revenue (AI products, AI-powered services, customer-facing features)</li>
+                            <li><strong class="text-amber-400">General:</strong> AI investment without clear cost/revenue specificity (tracked separately)</li>
+                        </ul>
+                    </div>
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                        <h4 class="font-semibold text-gray-200 mb-2">Capture Stage</h4>
+                        <ul class="text-sm text-gray-400 space-y-1">
+                            <li><strong class="text-gray-300">Planned:</strong> Announced intentions, roadmap items, strategy statements</li>
+                            <li><strong class="text-gray-300">Invested:</strong> Actual spending, hiring, patent filing, product development</li>
+                            <li><strong class="text-gray-300">Realized:</strong> Announced results with quantifiable metrics (cost savings, revenue figures)</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">4.2 Sub-Scorer A: SEC Filing NLP</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Analyzes the text of a company's most recent SEC filing (10-K or 10-Q) for AI-related language. The scorer uses a tiered keyword system that weights specific AI terminology (e.g., "large language model," "neural network") more heavily than generic terms (e.g., "automation," "digital transformation"). Each keyword match is classified by examining the surrounding text for cost or revenue context.
+                </p>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    When available, an LLM-based scorer supplements the keyword approach. The LLM evaluates strategic importance, specificity, and investment evidence, and provides independent cost/revenue/general capture assessments with stage classifications. The final score blends LLM and keyword results.
+                </p>
+                <p class="text-gray-400 text-sm">
+                    Stage classification uses contextual cues: "plan to deploy" maps to Planned, "implemented across divisions" maps to Invested, "reduced costs by $X million" maps to Realized.
+                </p>
+
+                <h3 class="text-xl font-semibold mb-3 mt-6 text-gray-100">4.3 Sub-Scorer B: AI Product Analysis</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Scans recent news and press releases for AI product signals. Distinct signal types include: AI product launches (scored by specificity), shipped products with user/revenue attribution, and AI partnerships with major AI providers. Each article is classified based on content analysis:
+                </p>
+                <ul class="text-gray-300 space-y-1 ml-6 list-disc mb-4">
+                    <li>External product launches are classified as Revenue/Invested</li>
+                    <li>Shipped products with revenue attribution are Revenue/Realized</li>
+                    <li>Internal tool deployments are Cost/Invested</li>
+                    <li>Cost savings announcements are Cost/Realized</li>
+                    <li>Broad AI strategy announcements are General/Planned</li>
+                </ul>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">4.4 Sub-Scorer C: AI Job Signals</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Estimates the ratio of AI/ML job postings relative to total hiring. When job aggregator API data is available, the ratio is computed directly. Otherwise, a heuristic estimate is applied based on company characteristics and known AI intensity of peer companies.
+                </p>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Job titles are classified by target dimension when individual title data is available: product-focused AI roles (e.g., "AI Product Manager," "AI Solutions Architect") map to Revenue, while infrastructure roles (e.g., "MLOps Engineer," "Automation Engineer") map to Cost. Ambiguous AI/ML roles default to General rather than an artificial 50/50 split. All job evidence is classified as Invested stage.
+                </p>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">4.5 Sub-Scorer D: Patent Signals</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    Queries the USPTO PatentsView API for AI-related patents filed by the company. Patent scoring uses a tiered system based on total AI patent count and applies a recency bonus for recent filings. Classification uses CPC codes and abstract text analysis:
+                </p>
+                <ul class="text-gray-300 space-y-1 ml-6 list-disc mb-4">
+                    <li>Revenue-oriented CPC codes (computer vision, speech processing, NLP) map to Revenue</li>
+                    <li>Cost-oriented abstract keywords (optimization, scheduling, automation, anomaly detection) map to Cost</li>
+                    <li>Patents without clear cost/revenue signal default to General</li>
+                </ul>
+                <p class="text-gray-400 text-sm">All patent evidence is classified as Invested stage, reflecting active R&D commitment.</p>
+            </section>
+
+            <!-- 5. Capture Aggregation -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">5. Capture Aggregation</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The four sub-scorers are combined through weighted aggregation, with each sub-scorer contributing a configurable share of the total. The aggregation maintains strict dimensional separation:
+                </p>
+                <ul class="text-gray-300 space-y-2 ml-6 list-disc mb-6">
+                    <li><strong>Cost Capture</strong> = weighted average of each sub-scorer's cost-targeted evidence scores</li>
+                    <li><strong>Revenue Capture</strong> = weighted average of each sub-scorer's revenue-targeted evidence scores</li>
+                    <li><strong>General AI Investment</strong> = weighted average of each sub-scorer's general-targeted evidence scores</li>
+                </ul>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    When a sub-scorer returns no evidence (e.g., no patents found), it is excluded from the weighted average rather than contributing a zero, preventing data availability gaps from penalizing companies.
+                </p>
+
+                <h3 class="text-xl font-semibold mb-3 text-gray-100">5.1 Discrepancy Flags</h3>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The system generates automated discrepancy flags when opportunity and capture diverge significantly. These flags help identify companies worth investigating further:
+                </p>
+                <ul class="text-gray-400 text-sm space-y-1 ml-6 list-disc">
+                    <li>"Significant AI cost savings potential unrealized" — high Cost Opportunity, low Cost Capture</li>
+                    <li>"AI revenue overweighted vs industry baseline" — Revenue Capture exceeds Revenue Opportunity</li>
+                    <li>"AI investment not translating to targeted outcomes" — high General Investment but low Cost + Revenue Capture</li>
+                    <li>"High AI discussion in filings but low product evidence" — possible AI-washing</li>
+                    <li>"Heavy AI hiring but few visible AI products" — likely in build phase</li>
+                </ul>
+            </section>
+
+            <!-- 6. Index Construction -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">6. Index Construction</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The four core values are used to compute composite scores for quadrant classification. A composite opportunity score and composite capture score are each a weighted average of their cost and revenue components. Companies are then assigned to quadrants based on whether their composite scores exceed configurable thresholds:
+                </p>
+                <div class="grid grid-cols-2 gap-4 max-w-md mx-auto mb-6">
+                    <div class="bg-yellow-900/20 border border-yellow-800/30 rounded-xl p-4 text-center">
+                        <p class="font-semibold text-yellow-400 text-sm">Untapped Potential</p>
+                        <p class="text-xs text-gray-500 mt-1">High Opportunity<br>Low Capture</p>
+                    </div>
+                    <div class="bg-green-900/20 border border-green-800/30 rounded-xl p-4 text-center">
+                        <p class="font-semibold text-green-400 text-sm">AI Leaders</p>
+                        <p class="text-xs text-gray-500 mt-1">High Opportunity<br>High Capture</p>
+                    </div>
+                    <div class="bg-gray-800/50 border border-gray-700/30 rounded-xl p-4 text-center">
+                        <p class="font-semibold text-gray-400 text-sm">AI-Resistant</p>
+                        <p class="text-xs text-gray-500 mt-1">Low Opportunity<br>Low Capture</p>
+                    </div>
+                    <div class="bg-blue-900/20 border border-blue-800/30 rounded-xl p-4 text-center">
+                        <p class="font-semibold text-blue-400 text-sm">Over-investing?</p>
+                        <p class="text-xs text-gray-500 mt-1">Low Opportunity<br>High Capture</p>
+                    </div>
+                </div>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    For portfolio construction, companies are ranked by composite score and selected into index variants with configurable weighting schemes (equal-weighted and score-weighted). The index is reconstituted periodically as scores are refreshed with new data.
+                </p>
+            </section>
+
+            <!-- 7. Data Sources -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">7. Data Sources</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-700">
+                                <th class="py-3 px-4 text-gray-400 font-medium">Source</th>
+                                <th class="py-3 px-4 text-gray-400 font-medium">Used For</th>
+                                <th class="py-3 px-4 text-gray-400 font-medium">Update Frequency</th>
+                            </tr>
+                        </thead>
+                        <tbody class="text-gray-300">
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">SEC EDGAR</td><td class="py-3 px-4">Company tickers, CIK mapping, 10-K/10-Q filing text</td><td class="py-3 px-4">Quarterly</td></tr>
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">BLS Employment Projections</td><td class="py-3 px-4">Industry-occupation matrix for workforce composition</td><td class="py-3 px-4">Annual</td></tr>
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">Microsoft AI Applicability</td><td class="py-3 px-4">Per-occupation AI applicability scores</td><td class="py-3 px-4">Periodic</td></tr>
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">USPTO PatentsView</td><td class="py-3 px-4">AI-related patent counts, CPC codes, abstracts</td><td class="py-3 px-4">Weekly</td></tr>
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">Yahoo Finance</td><td class="py-3 px-4">Company financials, sector/industry classification</td><td class="py-3 px-4">Daily</td></tr>
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">GNews API</td><td class="py-3 px-4">AI product launch and partnership news</td><td class="py-3 px-4">Real-time</td></tr>
+                            <tr class="border-b border-gray-800"><td class="py-3 px-4">Adzuna API</td><td class="py-3 px-4">Job posting counts and AI job ratios</td><td class="py-3 px-4">Daily</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- 8. Limitations -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">8. Limitations and Considerations</h2>
+                <ul class="text-gray-300 space-y-3 ml-6 list-disc">
+                    <li><strong>Public data only:</strong> The framework relies entirely on publicly available data. Companies with significant AI activity that is not reflected in filings, patents, job postings, or press releases will be underscored.</li>
+                    <li><strong>Industry classification granularity:</strong> SIC-to-NAICS mapping and occupation matrices operate at industry group levels. Individual company workforce composition may differ significantly from industry averages.</li>
+                    <li><strong>Keyword and pattern limitations:</strong> NLP scoring relies on keyword matching and context window analysis. Sophisticated AI strategies described in non-standard language may be missed.</li>
+                    <li><strong>General classification conservatism:</strong> The honest classification principle means that ambiguous AI evidence defaults to General rather than being split across Cost and Revenue. This produces conservative capture scores but avoids artificial precision.</li>
+                    <li><strong>Temporal lag:</strong> SEC filings reflect past reporting periods. Patent data has publication delays. The capture dimension inherently lags real-time company activity.</li>
+                    <li><strong>No proprietary data:</strong> Unlike strategies that use satellite imagery, credit card data, or web scraping of private platforms, this index uses only structured public APIs and government datasets.</li>
+                </ul>
+            </section>
+
+            <!-- 9. Conclusion -->
+            <section>
+                <h2 class="text-2xl font-bold mb-4 text-gray-100">9. Conclusion</h2>
+                <p class="text-gray-300 leading-relaxed mb-4">
+                    The AI Opportunity Index provides a structured, transparent framework for evaluating companies' AI positioning. By separating opportunity from capture and cost from revenue, investors can identify distinct categories of AI exposure: companies with massive untapped potential, companies efficiently converting opportunity into execution, and companies whose AI investments may be misallocated relative to their structural opportunity.
+                </p>
+                <p class="text-gray-300 leading-relaxed">
+                    The framework's honest classification of evidence, configurable weighting system, and multi-source scoring ensemble are designed to produce scores that are defensible, interpretable, and actionable. All scoring parameters are centrally configured and documented, enabling systematic sensitivity analysis and methodology evolution as the AI landscape develops.
+                </p>
+            </section>
+
+        </div>
+
+        <!-- CTA -->
+        <div class="mt-16 text-center border-t border-gray-800 pt-12">
+            <h3 class="text-xl font-semibold mb-4">Explore the Data</h3>
+            <p class="text-gray-400 mb-6">Subscribe to access the full interactive dashboard with 4-value scores for every company, peer comparisons, and classified evidence.</p>
+            <a href="/#subscribe" class="bg-brand-600 hover:bg-brand-700 text-white px-8 py-3 rounded-xl text-sm font-semibold transition shadow-lg shadow-brand-600/20 inline-block">
+                Sign Up for Early Access
+            </a>
+        </div>
+    </article>
+
+    <!-- Footer -->
+    <footer class="py-8 border-t border-gray-800">
+        <div class="max-w-7xl mx-auto px-6 text-center text-sm text-gray-500">
+            &copy; 2025 Winona Quantitative Research. All rights reserved. | <a href="/" class="text-gray-400 hover:text-white">Home</a>
+        </div>
+    </footer>
+
+</body>
+</html>
