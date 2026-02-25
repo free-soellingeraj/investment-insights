@@ -1,0 +1,48 @@
+/* AI Opportunity Index — Custom Styles */
+
+:root {
+    --brand-primary: #6366f1;
+    --brand-dark: #4338ca;
+}
+
+/* Smooth scrolling */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Chart container responsive sizing */
+#growth-chart {
+    min-height: 400px;
+    max-height: 600px;
+}
+
+@media (max-width: 768px) {
+    #growth-chart {
+        min-height: 300px;
+    }
+}
+
+/* Table hover highlight */
+#metrics-table tbody tr:hover,
+#holdings-table tbody tr:hover {
+    background-color: rgba(99, 102, 241, 0.05);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #111827;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4b5563;
+}

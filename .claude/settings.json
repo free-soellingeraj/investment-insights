@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(dd * of=/dev/*)",
+      "Bash(mkfs *)",
+      "Bash(> /dev/sd*)",
+      "Bash(> /dev/nvme*)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(rmdir *)",
+      "Bash(shred *)",
+      "Bash(unlink *)",
+      "Bash(truncate *)",
+
+      "Bash(*psql*DROP *)",
+      "Bash(*psql*drop *)",
+      "Bash(*psql*DELETE *)",
+      "Bash(*psql*delete *)",
+      "Bash(*psql*UPDATE *)",
+      "Bash(*psql*update *)",
+      "Bash(*psql*INSERT *)",
+      "Bash(*psql*insert *)",
+      "Bash(*psql*TRUNCATE *)",
+      "Bash(*psql*truncate *)",
+      "Bash(*psql*ALTER *)",
+      "Bash(*psql*alter *)",
+      "Bash(*psql*CREATE *)",
+      "Bash(*psql*create *)",
+      "Bash(*psql*GRANT *)",
+      "Bash(*psql*grant *)",
+      "Bash(*psql*REVOKE *)",
+      "Bash(*psql*revoke *)"
+    ],
+    "allow": [
+      "Bash(*)",
+      "Edit(*)",
+      "Write(*)"
+    ]
+  }
+}

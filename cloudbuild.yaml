@@ -1,0 +1,35 @@
+steps:
+  # Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/ai-opportunity-index/app:$COMMIT_SHA'
+      - '.'
+
+  # Push to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/ai-opportunity-index/app:$COMMIT_SHA'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'ai-opportunity-index'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/ai-opportunity-index/app:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--port=8080'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--min-instances=0'
+      - '--max-instances=3'
+      - '--allow-unauthenticated'
+      - '--set-secrets=STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest,STRIPE_PRICE_ID=stripe-price-id:latest,FIRECRAWL_API_KEY=firecrawl-api-key:latest,GITHUB_TOKEN=github-token:latest'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/ai-opportunity-index/app:$COMMIT_SHA'

@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Opportunity Index — Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .loader { border: 3px solid #374151; border-top: 3px solid #6366f1; border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; display: inline-block; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { color: #a5b4fc; }
+        th.sortable .arrow { font-size: 10px; margin-left: 2px; opacity: 0.4; }
+        th.sortable.active .arrow { opacity: 1; color: #818cf8; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 antialiased">
+    <script>const AUTH_TOKEN = "{{TOKEN}}";</script>
+
+    <!-- Nav -->
+    <nav class="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center font-bold text-sm">AI</div>
+                <span class="text-lg font-semibold">AI Opportunity Index</span>
+                <span class="text-xs text-gray-500 ml-2">Dashboard</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="/status" class="text-gray-300 hover:text-white text-sm">Pipeline Status</a>
+                <a href="/api/customer-portal?token={{TOKEN}}" class="text-gray-300 hover:text-white text-sm">Manage Subscription</a>
+                <a href="/" class="text-gray-400 hover:text-white text-sm">Home</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="pt-24 max-w-7xl mx-auto px-6 pb-20">
+
+        <!-- Methodology banner -->
+        <section class="mb-8 bg-gray-900 border border-gray-800 rounded-2xl p-6">
+            <div class="flex items-start gap-4">
+                <div class="w-10 h-10 bg-brand-600/20 rounded-lg flex items-center justify-center flex-shrink-0 mt-1">
+                    <svg class="w-5 h-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </div>
+                <div>
+                    <h3 class="font-semibold mb-1">4-Value Scoring Framework</h3>
+                    <p class="text-sm text-gray-400">Every company is scored on four dimensions: <strong class="text-blue-400">Cost Opportunity</strong> (AI's potential to reduce internal costs), <strong class="text-green-400">Cost Capture</strong> (actual AI deployment for cost savings), <strong class="text-purple-400">Revenue Opportunity</strong> (AI's potential to grow revenue), and <strong class="text-amber-400">Revenue Capture</strong> (actual AI products and revenue-facing investment). General AI announcements are tracked separately and do not inflate capture scores. <a href="/whitepaper" class="text-brand-500 underline">Read the whitepaper</a></p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dual Scatter Plots: Cost & Revenue (0-1 Scores) -->
+        <section class="mb-12">
+            <h2 class="text-2xl font-bold mb-2">Cost & Revenue: Opportunity vs Capture (Scores)</h2>
+            <p class="text-gray-400 text-sm mb-4">Each dot is a company. Left: cost dimension. Right: revenue dimension. Companies above the diagonal are capturing more than their structural opportunity. Click any dot to open company profile.</p>
+            <div class="grid md:grid-cols-2 gap-6">
+                <div id="scatter-cost" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:450px;"></div>
+                <div id="scatter-revenue" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:450px;"></div>
+            </div>
+        </section>
+
+        <!-- Legacy Scatter Plot -->
+        <section class="mb-12">
+            <h2 class="text-2xl font-bold mb-2">Opportunity vs Realization (Combined)</h2>
+            <p class="text-gray-400 text-sm mb-4">Combined 2D view. Click any dot to open company profile.</p>
+            <div id="scatter-chart" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:500px;"></div>
+        </section>
+
+        <!-- Company Table -->
+        <section class="mb-12">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-2xl font-bold">Companies</h2>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <select id="filter-sector" onchange="loadCompanies()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm">
+                        <option value="">All Sectors</option>
+                    </select>
+                    <select id="filter-industry" onchange="loadCompanies()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm">
+                        <option value="">All Industries</option>
+                    </select>
+                    <select id="filter-quadrant" onchange="loadCompanies()" class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm">
+                        <option value="">All Quadrants</option>
+                        <option value="high_opp_high_real">AI Leaders</option>
+                        <option value="high_opp_low_real">Untapped Potential</option>
+                        <option value="low_opp_high_real">Over-investing?</option>
+                        <option value="low_opp_low_real">AI-Resistant</option>
+                    </select>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="border-b border-gray-700">
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="ticker" onclick="sortTable('ticker')">Ticker <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="company_name" onclick="sortTable('company_name')">Company <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="cost_opp_score" onclick="sortTable('cost_opp_score')">Cost Opp <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="cost_capture_score" onclick="sortTable('cost_capture_score')">Cost Cap <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="revenue_opp_score" onclick="sortTable('revenue_opp_score')">Rev Opp <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="revenue_capture_score" onclick="sortTable('revenue_capture_score')">Rev Cap <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="general_investment_score" onclick="sortTable('general_investment_score')">General <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="cost_opp_usd" onclick="sortTable('cost_opp_usd')">Cost $ <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="revenue_opp_usd" onclick="sortTable('revenue_opp_usd')">Rev $ <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="total_investment_usd" onclick="sortTable('total_investment_usd')">Total $ <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="cost_roi" onclick="sortTable('cost_roi')">Cost ROI <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="revenue_roi" onclick="sortTable('revenue_roi')">Rev ROI <span class="arrow">▲▼</span></th>
+                            <th class="py-3 px-3 text-xs text-gray-400 font-medium sortable" data-key="quadrant_label" onclick="sortTable('quadrant_label')">Quadrant <span class="arrow">▲▼</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="companies-body" class="text-sm">
+                        <tr><td colspan="13" class="py-8 text-center text-gray-500"><div class="loader mx-auto"></div><p class="mt-2">Loading companies...</p></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="flex justify-between items-center mt-4">
+                <button id="btn-prev" onclick="prevPage()" class="px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm disabled:opacity-50" disabled>Previous</button>
+                <span id="page-info" class="text-sm text-gray-400"></span>
+                <button id="btn-next" onclick="nextPage()" class="px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm disabled:opacity-50">Next</button>
+            </div>
+        </section>
+
+    </div>
+
+    <script>
+    let allCompanies = [];
+    let currentPage = 0;
+    const PAGE_SIZE = 50;
+    let sortKey = null;
+    let sortAsc = true;
+
+    async function apiFetch(url) {
+        const res = await fetch(url);
+        return res.json();
+    }
+
+    function fmtScore(v) { return v != null ? v.toFixed(3) : '—'; }
+    function fmtRoi(v) { return v != null ? v.toFixed(2) + 'x' : '—'; }
+    function fmtDollar(v) {
+        if (v == null || v === 0) return '—';
+        if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+        if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+        if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+        return '$' + v.toFixed(0);
+    }
+
+    // ── Sorting ──────────────────────────────────────────────────────────
+
+    function sortTable(key) {
+        if (sortKey === key) {
+            sortAsc = !sortAsc;
+        } else {
+            sortKey = key;
+            sortAsc = false; // default desc for scores
+            if (key === 'ticker' || key === 'company_name' || key === 'quadrant_label') sortAsc = true;
+        }
+
+        allCompanies.sort((a, b) => {
+            let va = a[key], vb = b[key];
+            if (va == null) va = sortAsc ? Infinity : -Infinity;
+            if (vb == null) vb = sortAsc ? Infinity : -Infinity;
+            if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+            return sortAsc ? va - vb : vb - va;
+        });
+
+        // Update header active state
+        document.querySelectorAll('th.sortable').forEach(th => {
+            th.classList.toggle('active', th.dataset.key === key);
+            if (th.dataset.key === key) {
+                th.querySelector('.arrow').textContent = sortAsc ? '▲' : '▼';
+            } else {
+                th.querySelector('.arrow').textContent = '▲▼';
+            }
+        });
+
+        currentPage = 0;
+        renderCompanyTable();
+    }
+
+    async function loadCompanies() {
+        const sector = document.getElementById('filter-sector').value;
+        const industry = document.getElementById('filter-industry').value;
+        const quadrant = document.getElementById('filter-quadrant').value;
+        let url = `/api/companies?limit=500`;
+        if (sector) url += `&sector=${encodeURIComponent(sector)}`;
+        if (industry) url += `&industry=${encodeURIComponent(industry)}`;
+        if (quadrant) url += `&quadrant=${encodeURIComponent(quadrant)}`;
+
+        try {
+            const data = await apiFetch(url);
+            allCompanies = data.companies || [];
+            currentPage = 0;
+            // Re-apply current sort
+            if (sortKey) {
+                allCompanies.sort((a, b) => {
+                    let va = a[sortKey], vb = b[sortKey];
+                    if (va == null) va = sortAsc ? Infinity : -Infinity;
+                    if (vb == null) vb = sortAsc ? Infinity : -Infinity;
+                    if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+                    return sortAsc ? va - vb : vb - va;
+                });
+            }
+            renderCompanyTable();
+            renderDualScatter();
+            renderScatterPlot();
+            populateFilters();
+        } catch (e) {
+            document.getElementById('companies-body').innerHTML =
+                '<tr><td colspan="13" class="py-8 text-center text-gray-500">Failed to load companies. API may not be ready.</td></tr>';
+        }
+    }
+
+    function renderCompanyTable() {
+        const tbody = document.getElementById('companies-body');
+        const start = currentPage * PAGE_SIZE;
+        const page = allCompanies.slice(start, start + PAGE_SIZE);
+
+        if (page.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="13" class="py-8 text-center text-gray-500">No companies found.</td></tr>';
+            return;
+        }
+
+        const token = AUTH_TOKEN;
+        tbody.innerHTML = page.map(c => `
+            <tr class="border-b border-gray-800 hover:bg-gray-800/50 cursor-pointer transition">
+                <td class="py-3 px-3 font-semibold text-brand-500"><a href="/company/${c.ticker}?token=${token}" target="_blank" class="hover:underline">${c.ticker}</a></td>
+                <td class="py-3 px-3 text-xs"><a href="/company/${c.ticker}?token=${token}" target="_blank" class="hover:underline">${c.company_name || '—'}</a></td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtScore(c.cost_opp_score)}</td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtScore(c.cost_capture_score)}</td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtScore(c.revenue_opp_score)}</td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtScore(c.revenue_capture_score)}</td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtScore(c.general_investment_score)}</td>
+                <td class="py-3 px-3 font-mono text-xs text-green-400">${fmtDollar(c.cost_opp_usd)}</td>
+                <td class="py-3 px-3 font-mono text-xs text-purple-400">${fmtDollar(c.revenue_opp_usd)}</td>
+                <td class="py-3 px-3 font-mono text-xs text-amber-400">${fmtDollar(c.total_investment_usd)}</td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtRoi(c.cost_roi)}</td>
+                <td class="py-3 px-3 font-mono text-xs">${fmtRoi(c.revenue_roi)}</td>
+                <td class="py-3 px-3"><span class="px-2 py-1 rounded text-xs ${quadrantClass(c.quadrant)}">${c.quadrant_label || '—'}</span></td>
+            </tr>
+        `).join('');
+
+        document.getElementById('page-info').textContent = `${start + 1}–${Math.min(start + PAGE_SIZE, allCompanies.length)} of ${allCompanies.length}`;
+        document.getElementById('btn-prev').disabled = currentPage === 0;
+        document.getElementById('btn-next').disabled = start + PAGE_SIZE >= allCompanies.length;
+    }
+
+    function quadrantClass(q) {
+        const classes = {
+            'high_opp_high_real': 'bg-green-900/50 text-green-400',
+            'high_opp_low_real': 'bg-yellow-900/50 text-yellow-400',
+            'low_opp_high_real': 'bg-blue-900/50 text-blue-400',
+            'low_opp_low_real': 'bg-gray-800 text-gray-400',
+        };
+        return classes[q] || 'bg-gray-800 text-gray-400';
+    }
+
+    function prevPage() { if (currentPage > 0) { currentPage--; renderCompanyTable(); } }
+    function nextPage() { if ((currentPage + 1) * PAGE_SIZE < allCompanies.length) { currentPage++; renderCompanyTable(); } }
+
+    // ── Charts ───────────────────────────────────────────────────────────
+
+    function openCompanyTab(ticker) {
+        // Extract ticker from plotly hover text (first line before <br>)
+        const t = ticker.split('<br>')[0];
+        if (t) window.open(`/company/${t}?token=${AUTH_TOKEN}`, '_blank');
+    }
+
+    function renderDualScatter() {
+        if (allCompanies.length === 0) return;
+
+        const plotConfig = { responsive: true };
+        const baseLayout = {
+            paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+            font: { color: '#9ca3af' },
+            margin: { t: 30, r: 20, b: 60, l: 60 },
+            hovermode: 'closest',
+        };
+
+        const diagLine = {
+            x: [0, 1], y: [0, 1],
+            mode: 'lines', type: 'scatter',
+            line: { color: '#374151', width: 1, dash: 'dot' },
+            name: 'ROI = 1.0x', showlegend: false, hoverinfo: 'skip',
+        };
+
+        const costTrace = {
+            x: allCompanies.map(c => c.cost_opp_score || 0),
+            y: allCompanies.map(c => c.cost_capture_score || 0),
+            text: allCompanies.map(c => `${c.ticker}<br>Opp: ${fmtScore(c.cost_opp_score)}<br>Cap: ${fmtScore(c.cost_capture_score)}`),
+            hoverinfo: 'text',
+            mode: 'markers', type: 'scatter',
+            marker: { color: '#22c55e', size: 7, opacity: 0.7 },
+            name: 'Companies',
+        };
+        Plotly.newPlot('scatter-cost', [diagLine, costTrace], {
+            ...baseLayout,
+            title: { text: 'Cost: Opportunity vs Capture', font: { color: '#d1d5db', size: 14 } },
+            xaxis: { title: 'Cost Opportunity', gridcolor: '#1f2937', linecolor: '#374151', range: [0, 1] },
+            yaxis: { title: 'Cost Capture', gridcolor: '#1f2937', linecolor: '#374151', range: [0, 1] },
+        }, plotConfig);
+
+        const revTrace = {
+            x: allCompanies.map(c => c.revenue_opp_score || 0),
+            y: allCompanies.map(c => c.revenue_capture_score || 0),
+            text: allCompanies.map(c => `${c.ticker}<br>Opp: ${fmtScore(c.revenue_opp_score)}<br>Cap: ${fmtScore(c.revenue_capture_score)}`),
+            hoverinfo: 'text',
+            mode: 'markers', type: 'scatter',
+            marker: { color: '#6366f1', size: 7, opacity: 0.7 },
+            name: 'Companies',
+        };
+        Plotly.newPlot('scatter-revenue', [diagLine, revTrace], {
+            ...baseLayout,
+            title: { text: 'Revenue: Opportunity vs Capture', font: { color: '#d1d5db', size: 14 } },
+            xaxis: { title: 'Revenue Opportunity', gridcolor: '#1f2937', linecolor: '#374151', range: [0, 1] },
+            yaxis: { title: 'Revenue Capture', gridcolor: '#1f2937', linecolor: '#374151', range: [0, 1] },
+        }, plotConfig);
+
+        document.getElementById('scatter-cost').on('plotly_click', function(data) { openCompanyTab(data.points[0].text); });
+        document.getElementById('scatter-revenue').on('plotly_click', function(data) { openCompanyTab(data.points[0].text); });
+    }
+
+    function renderScatterPlot() {
+        if (allCompanies.length === 0) return;
+        const quadrantColors = {
+            'high_opp_high_real': '#22c55e',
+            'high_opp_low_real': '#eab308',
+            'low_opp_high_real': '#3b82f6',
+            'low_opp_low_real': '#6b7280',
+        };
+
+        const traces = {};
+        allCompanies.forEach(c => {
+            const q = c.quadrant || 'unknown';
+            if (!traces[q]) traces[q] = { x: [], y: [], text: [], name: c.quadrant_label || q, marker: { color: quadrantColors[q] || '#888', size: 8 }, mode: 'markers', type: 'scatter' };
+            traces[q].x.push(c.opportunity);
+            traces[q].y.push(c.realization);
+            traces[q].text.push(c.ticker);
+        });
+
+        Plotly.newPlot('scatter-chart', Object.values(traces), {
+            paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+            font: { color: '#9ca3af' },
+            xaxis: { title: 'AI Opportunity', gridcolor: '#1f2937', linecolor: '#374151' },
+            yaxis: { title: 'AI Realization', gridcolor: '#1f2937', linecolor: '#374151' },
+            legend: { orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center' },
+            margin: { t: 20, r: 20, b: 60, l: 60 },
+            hovermode: 'closest',
+        }, { responsive: true });
+
+        document.getElementById('scatter-chart').on('plotly_click', function(data) {
+            const ticker = data.points[0].text;
+            if (ticker) window.open(`/company/${ticker}?token=${AUTH_TOKEN}`, '_blank');
+        });
+    }
+
+    function populateFilters() {
+        const sectors = [...new Set(allCompanies.map(c => c.sector).filter(Boolean))].sort();
+        const sel = document.getElementById('filter-sector');
+        const current = sel.value;
+        sel.innerHTML = '<option value="">All Sectors</option>' + sectors.map(s => `<option value="${s}" ${s === current ? 'selected' : ''}>${s}</option>`).join('');
+
+        const industries = [...new Set(allCompanies.map(c => c.industry).filter(Boolean))].sort();
+        const indSel = document.getElementById('filter-industry');
+        const currentInd = indSel.value;
+        indSel.innerHTML = '<option value="">All Industries</option>' + industries.map(i => `<option value="${i}" ${i === currentInd ? 'selected' : ''}>${i}</option>`).join('');
+    }
+
+    // Initialize
+    loadCompanies();
+    </script>
+</body>
+</html>

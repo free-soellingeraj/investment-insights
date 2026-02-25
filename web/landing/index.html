@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Opportunity Index — Systematic Exposure to AI's Biggest Winners</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-950 text-gray-100 antialiased">
+
+    <!-- Nav -->
+    <nav class="fixed top-0 w-full z-50 bg-gray-950/80 backdrop-blur border-b border-gray-800">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center font-bold text-sm">AI</div>
+                <span class="text-lg font-semibold">AI Opportunity Index</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="#" onclick="showLoginModal()" class="text-gray-300 hover:text-white px-4 py-2 text-sm font-medium transition">Log In</a>
+                <a href="#subscribe" class="bg-brand-600 hover:bg-brand-700 px-5 py-2 rounded-lg text-sm font-medium transition">Sign Up for Early Access</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="relative pt-32 pb-20 overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-b from-brand-900/30 via-gray-950 to-gray-950"></div>
+        <div class="relative max-w-7xl mx-auto px-6 text-center">
+            <h1 class="text-5xl md:text-6xl font-bold tracking-tight mb-6">
+                AI Opportunity Index
+            </h1>
+            <p class="text-xl md:text-2xl text-gray-400 mb-10 max-w-3xl mx-auto">
+                Systematic exposure to AI's biggest winners.
+            </p>
+            <div class="flex flex-wrap justify-center gap-6 mb-12">
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl px-6 py-4 text-center min-w-[140px]">
+                    <div class="text-3xl font-bold text-brand-500" id="stat-holdings">50</div>
+                    <div class="text-sm text-gray-400 mt-1">Holdings</div>
+                </div>
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl px-6 py-4 text-center min-w-[140px]">
+                    <div class="text-3xl font-bold text-green-400" id="stat-return">--</div>
+                    <div class="text-sm text-gray-400 mt-1">Ann. Return*</div>
+                </div>
+                <div class="bg-gray-800/50 border border-gray-700 rounded-xl px-6 py-4 text-center min-w-[140px]">
+                    <div class="text-3xl font-bold text-blue-400" id="stat-sharpe">--</div>
+                    <div class="text-sm text-gray-400 mt-1">Sharpe Ratio</div>
+                </div>
+            </div>
+            <button onclick="createCheckout()" class="bg-brand-600 hover:bg-brand-700 text-white px-8 py-4 rounded-xl text-lg font-semibold transition shadow-lg shadow-brand-600/20">
+                Sign Up for Early Access — $99/month
+            </button>
+        </div>
+    </section>
+
+    <!-- Growth of $10K Chart -->
+    <section class="py-20">
+        <div class="max-w-7xl mx-auto px-6">
+            <h2 class="text-3xl font-bold text-center mb-4">Growth of $10,000</h2>
+            <p class="text-gray-400 text-center mb-10 max-w-2xl mx-auto">
+                Hypothetical backtested performance of three AI Opportunity Index variants vs. the S&P 500 (SPY), starting January 2020.
+            </p>
+            <div id="growth-chart" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:500px;"></div>
+        </div>
+    </section>
+
+    <!-- Composition: By Sector & By Quadrant -->
+    <section class="pb-20">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="grid md:grid-cols-2 gap-6">
+                <div id="pie-sector" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:360px;"></div>
+                <div id="pie-quadrant" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:360px;"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Performance Metrics Table -->
+    <section class="py-20 bg-gray-900/50">
+        <div class="max-w-7xl mx-auto px-6">
+            <h2 class="text-3xl font-bold text-center mb-10">Performance Metrics</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse" id="metrics-table">
+                    <thead>
+                        <tr class="border-b border-gray-700">
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Metric</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Top 30 Score-Wtd</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Top 50 Equal-Wtd</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Top 50 Score-Wtd</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">S&P 500</th>
+                        </tr>
+                    </thead>
+                    <tbody id="metrics-body" class="text-sm">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- Methodology Overview -->
+    <section class="py-20">
+        <div class="max-w-7xl mx-auto px-6">
+            <h2 class="text-3xl font-bold text-center mb-4">How It Works</h2>
+            <p class="text-gray-400 text-center mb-12 max-w-3xl mx-auto">
+                A 4-stage pipeline converts raw public documents into dollar-value estimates of each company's AI cost savings and revenue generation potential over a 3-year horizon.
+            </p>
+
+            <!-- Pipeline Stages -->
+            <div class="grid md:grid-cols-4 gap-4 mb-16">
+                <!-- Stage 1: Collect -->
+                <div class="relative bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-8 h-8 bg-indigo-500/20 border border-indigo-500/30 rounded-lg flex items-center justify-center text-sm font-bold text-indigo-400">1</div>
+                        <h3 class="text-lg font-semibold">Collect</h3>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-4">Gather raw documents from public sources for each company in the index universe.</p>
+                    <div class="space-y-2 text-xs">
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-indigo-500 rounded-full"></span>SEC 10-K & 10-Q filings</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-indigo-500 rounded-full"></span>AI news & product launches</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-indigo-500 rounded-full"></span>USPTO patent records</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-indigo-500 rounded-full"></span>Job posting signals</div>
+                    </div>
+                    <div class="hidden md:block absolute -right-3 top-1/2 -translate-y-1/2 z-10 text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </div>
+                </div>
+
+                <!-- Stage 2: Extract -->
+                <div class="relative bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-8 h-8 bg-cyan-500/20 border border-cyan-500/30 rounded-lg flex items-center justify-center text-sm font-bold text-cyan-400">2</div>
+                        <h3 class="text-lg font-semibold">Extract</h3>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-4">Identify relevant AI evidence passages and classify each on two axes.</p>
+                    <div class="space-y-2 text-xs">
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-cyan-500 rounded-full"></span>Target: cost, revenue, or general</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-cyan-500 rounded-full"></span>Stage: planned, invested, or realized</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-cyan-500 rounded-full"></span>Confidence score per passage</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-cyan-500 rounded-full"></span>Keyword or LLM extraction</div>
+                    </div>
+                    <div class="hidden md:block absolute -right-3 top-1/2 -translate-y-1/2 z-10 text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </div>
+                </div>
+
+                <!-- Stage 3: Value -->
+                <div class="relative bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-8 h-8 bg-green-500/20 border border-green-500/30 rounded-lg flex items-center justify-center text-sm font-bold text-green-400">3</div>
+                        <h3 class="text-lg font-semibold">Value</h3>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-4">Estimate the dollar impact of each evidence passage over a 3-year horizon.</p>
+                    <div class="space-y-2 text-xs">
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>BLS salary x AI applicability</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>Revenue penetration rates</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>Horizon shape by stage</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>Year 1 / Year 2 / Year 3 estimates</div>
+                    </div>
+                    <div class="hidden md:block absolute -right-3 top-1/2 -translate-y-1/2 z-10 text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                    </div>
+                </div>
+
+                <!-- Stage 4: Score -->
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-8 h-8 bg-amber-500/20 border border-amber-500/30 rounded-lg flex items-center justify-center text-sm font-bold text-amber-400">4</div>
+                        <h3 class="text-lg font-semibold">Score</h3>
+                    </div>
+                    <p class="text-sm text-gray-400 mb-4">Aggregate dollar estimates into company-level metrics and quadrant assignments.</p>
+                    <div class="space-y-2 text-xs">
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>Cost Opportunity ($)</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>Revenue Opportunity ($)</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>Cost & Revenue Capture ($)</div>
+                        <div class="flex items-center gap-2 text-gray-500"><span class="w-1.5 h-1.5 bg-amber-500 rounded-full"></span>Quadrant placement</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Supporting Details -->
+            <div class="grid md:grid-cols-3 gap-8">
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+                    <div class="w-12 h-12 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-center justify-center mb-5">
+                        <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-3">Dollar Values, Not Scores</h3>
+                    <p class="text-gray-400">Every estimate is in real dollars: how much AI could save a company in costs, or how much new revenue AI could generate. A 3-year horizon shows the ramp from planned to realized value.</p>
+                </div>
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+                    <div class="w-12 h-12 bg-cyan-500/10 border border-cyan-500/20 rounded-xl flex items-center justify-center mb-5">
+                        <svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-3">Evidence-Level Granularity</h3>
+                    <p class="text-gray-400">Every piece of evidence is classified by target (cost or revenue) and maturity stage (planned, invested, or realized). Each carries its own dollar estimate and horizon shape so you can see exactly what drives every number.</p>
+                </div>
+                <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8">
+                    <div class="w-12 h-12 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-center justify-center mb-5">
+                        <svg class="w-6 h-6 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-3">Public Data Only</h3>
+                    <p class="text-gray-400">Every estimate is grounded in public data: BLS workforce statistics, SEC filings, USPTO patents, and financial APIs. Full source citations on every evidence item. No black boxes.</p>
+                </div>
+            </div>
+
+            <!-- Whitepaper CTA -->
+            <div class="mt-12 text-center">
+                <a href="/whitepaper" class="inline-flex items-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 px-6 py-3 rounded-xl text-sm font-medium transition">
+                    <svg class="w-5 h-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Read the Technical Whitepaper
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Top 10 Holdings -->
+    <section class="py-20 bg-gray-900/50">
+        <div class="max-w-7xl mx-auto px-6">
+            <h2 class="text-3xl font-bold text-center mb-10">Top 10 Holdings</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse" id="holdings-table">
+                    <thead>
+                        <tr class="border-b border-gray-700">
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">#</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Ticker</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Company</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Sector</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Composite Score</th>
+                            <th class="py-3 px-4 text-sm text-gray-400 font-medium">Weight</th>
+                        </tr>
+                    </thead>
+                    <tbody id="holdings-body" class="text-sm">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- What Early Access Members Get -->
+    <section class="py-20">
+        <div class="max-w-7xl mx-auto px-6">
+            <h2 class="text-3xl font-bold text-center mb-12">What Early Access Members Get</h2>
+            <div class="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+                <div class="flex items-start gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="mt-1 text-brand-500">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold mb-1">Full Interactive Dashboard</h4>
+                        <p class="text-sm text-gray-400">Explore every scored company across the 4-value framework — dual scatter plots for cost and revenue dimensions, plus industry peer comparisons.</p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="mt-1 text-brand-500">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold mb-1">Company Detail Pages</h4>
+                        <p class="text-sm text-gray-400">Deep-dive into any company's 4-value scores, ROI metrics, classified evidence by target and stage, and industry peer rankings.</p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="mt-1 text-brand-500">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold mb-1">Scoring Methodology</h4>
+                        <p class="text-sm text-gray-400">Full transparency into how every score is computed — cost/revenue opportunity, capture scores, evidence classification, and ROI derivation.</p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="mt-1 text-brand-500">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold mb-1">Source Citations</h4>
+                        <p class="text-sm text-gray-400">Every data point traced back to SEC filings, BLS workforce data, and financial APIs. Verify anything independently.</p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="mt-1 text-brand-500">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold mb-1">Index Performance Tracking</h4>
+                        <p class="text-sm text-gray-400">Live growth-of-$10K chart with 3 portfolio variants, full performance metrics, and comparison vs. S&P 500.</p>
+                    </div>
+                </div>
+                <div class="flex items-start gap-4 bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="mt-1 text-brand-500">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+                    </div>
+                    <div>
+                        <h4 class="font-semibold mb-1">Monthly Updates</h4>
+                        <p class="text-sm text-gray-400">Scores refreshed monthly with latest filings, financial data, and AI product launches.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Sign Up CTA -->
+    <section id="subscribe" class="py-20 bg-gradient-to-b from-gray-950 to-brand-900/20">
+        <div class="max-w-3xl mx-auto px-6 text-center">
+            <h2 class="text-4xl font-bold mb-6">Get Early Access</h2>
+            <p class="text-xl text-gray-400 mb-10">
+                Our methodology evolves as companies evolve their strategies to utilize AI. Subscribe for updates and get full access to the dashboard, company detail pages, and scoring methodology.
+            </p>
+            <button onclick="createCheckout()" class="bg-brand-600 hover:bg-brand-700 text-white px-10 py-4 rounded-xl text-lg font-semibold transition shadow-lg shadow-brand-600/20">
+                Sign Up for Early Access — $99/month
+            </button>
+            <p class="text-sm text-gray-500 mt-4">Cancel anytime. No long-term commitment.</p>
+        </div>
+    </section>
+
+    <!-- Legal Disclaimers -->
+    <section class="py-16 border-t border-gray-800">
+        <div class="max-w-4xl mx-auto px-6">
+            <h3 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-6">Important Disclosures</h3>
+            <div class="text-xs text-gray-500 space-y-4 leading-relaxed">
+                <p><strong class="text-gray-400">HYPOTHETICAL BACKTESTED PERFORMANCE.</strong> The performance data shown on this page represents hypothetical, backtested results that do not represent actual trading. Backtested performance is developed with the benefit of hindsight and has inherent limitations.</p>
+                <p><strong class="text-gray-400">SIMULATED RESULTS LIMITATION.</strong> Simulated performance results have certain inherent limitations. Unlike actual performance records, simulated results do not represent actual trading. Since the trades have not actually been executed, the results may have under- or over-compensated for the impact, if any, of certain market factors, such as lack of liquidity.</p>
+                <p><strong class="text-gray-400">NOT INVESTMENT ADVICE.</strong> The AI Opportunity Index is a research product provided for informational purposes only. It does not constitute investment advice, a recommendation, or a solicitation to buy or sell any security. You should not rely on this information as the primary basis for your investment decisions.</p>
+                <p><strong class="text-gray-400">PAST PERFORMANCE DOES NOT GUARANTEE FUTURE RESULTS.</strong> There is no assurance that the index or any portfolio based on it will achieve its objectives or avoid substantial losses. Investment in securities involves risk of loss that clients should be prepared to bear.</p>
+                <p><strong class="text-gray-400">METHODOLOGY.</strong> The AI Opportunity Index scores companies on a 4-value framework (cost/revenue x opportunity/capture) using publicly available data including SEC filings, BLS workforce statistics, USPTO patents, financial APIs, and other public sources. Every piece of evidence is classified by target dimension (cost, revenue, or general) and stage (planned, invested, realized). Scores are computed algorithmically and may not capture all relevant factors affecting a company's AI prospects. See our <a href="/whitepaper" class="text-brand-500 underline">technical whitepaper</a> for methodology details.</p>
+                <p><strong class="text-gray-400">COSTS NOT REFLECTED.</strong> The backtested results shown do not reflect the deduction of transaction costs, management fees, or other expenses that would reduce actual returns. Actual investment results would differ from those shown.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-8 border-t border-gray-800">
+        <div class="max-w-7xl mx-auto px-6 text-center text-sm text-gray-500">
+            &copy; 2025 Winona Quantitative Research. All rights reserved. | <a href="/whitepaper" class="text-gray-400 hover:text-white">Whitepaper</a>
+        </div>
+    </footer>
+
+    <script>
+    // Data will be injected by the FastAPI server or pre-computed
+    // For static preview, use placeholder data
+    let INDEX_DATA = window.INDEX_DATA || null;
+
+    async function loadData() {
+        try {
+            const [metricsRes, holdingsRes] = await Promise.all([
+                fetch('/static/data/index_metrics.json').catch(() => null),
+                fetch('/static/data/top_holdings.json').catch(() => null),
+            ]);
+
+            const metrics = metricsRes && metricsRes.ok ? await metricsRes.json() : null;
+            const holdings = holdingsRes && holdingsRes.ok ? await holdingsRes.json() : null;
+
+            if (metrics) renderMetrics(metrics);
+            if (holdings) renderHoldings(holdings);
+
+            // Load chart data for each variant
+            const variants = ['top_30_score_weighted', 'top_50_equal_weighted', 'top_50_score_weighted'];
+            const chartData = {};
+            for (const v of variants) {
+                try {
+                    const res = await fetch(`/static/data/index_history_${v}.csv`);
+                    if (res.ok) {
+                        const text = await res.text();
+                        chartData[v] = parseCSV(text);
+                    }
+                } catch (e) {}
+            }
+            if (Object.keys(chartData).length > 0) renderChart(chartData);
+
+            // Update hero stats from top_50_score_weighted metrics
+            const primary = metrics?.top_50_score_weighted || metrics?.[Object.keys(metrics)[0]];
+            if (primary) {
+                document.getElementById('stat-return').textContent = (primary.annualized_return * 100).toFixed(1) + '%';
+                document.getElementById('stat-sharpe').textContent = primary.sharpe_ratio.toFixed(2);
+            }
+        } catch (e) {
+            console.log('Data not yet available — run compute_index_history.py first');
+        }
+    }
+
+    function parseCSV(text) {
+        const lines = text.trim().split('\n');
+        const headers = lines[0].split(',');
+        const data = { date: [], portfolio_value: [], spy_value: [] };
+        for (let i = 1; i < lines.length; i++) {
+            const vals = lines[i].split(',');
+            data.date.push(vals[0]);
+            data.portfolio_value.push(parseFloat(vals[1]));
+            data.spy_value.push(parseFloat(vals[2]));
+        }
+        return data;
+    }
+
+    function renderChart(chartData) {
+        const traces = [];
+        const names = {
+            'top_30_score_weighted': 'Top 30 Score-Weighted',
+            'top_50_equal_weighted': 'Top 50 Equal-Weighted',
+            'top_50_score_weighted': 'Top 50 Score-Weighted',
+        };
+        const colors = {
+            'top_30_score_weighted': '#6366f1',
+            'top_50_equal_weighted': '#22c55e',
+            'top_50_score_weighted': '#f59e0b',
+        };
+
+        let spyAdded = false;
+        for (const [variant, data] of Object.entries(chartData)) {
+            traces.push({
+                x: data.date, y: data.portfolio_value,
+                name: names[variant] || variant,
+                type: 'scatter', mode: 'lines',
+                line: { color: colors[variant] || '#888', width: 2 },
+            });
+            if (!spyAdded) {
+                traces.push({
+                    x: data.date, y: data.spy_value,
+                    name: 'S&P 500 (SPY)',
+                    type: 'scatter', mode: 'lines',
+                    line: { color: '#ef4444', width: 2, dash: 'dash' },
+                });
+                spyAdded = true;
+            }
+        }
+
+        Plotly.newPlot('growth-chart', traces, {
+            paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+            font: { color: '#9ca3af' },
+            xaxis: { gridcolor: '#1f2937', linecolor: '#374151' },
+            yaxis: { gridcolor: '#1f2937', linecolor: '#374151', title: 'Portfolio Value ($)', tickprefix: '$', tickformat: ',.0f' },
+            legend: { orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center' },
+            margin: { t: 20, r: 20, b: 60, l: 80 },
+            hovermode: 'x unified',
+        }, { responsive: true });
+    }
+
+    function renderMetrics(metrics) {
+        const rows = [
+            ['Annualized Return', 'annualized_return', v => (v * 100).toFixed(1) + '%'],
+            ['Total Return', 'total_return', v => (v * 100).toFixed(1) + '%'],
+            ['Sharpe Ratio', 'sharpe_ratio', v => v.toFixed(2)],
+            ['Max Drawdown', 'max_drawdown', v => (v * 100).toFixed(1) + '%'],
+            ['Alpha vs S&P 500', 'alpha_vs_spy', v => (v * 100).toFixed(1) + '%'],
+            ['Beta', 'beta', v => v.toFixed(2)],
+            ['Information Ratio', 'information_ratio', v => v.toFixed(2)],
+            ['Tracking Error', 'tracking_error', v => (v * 100).toFixed(1) + '%'],
+        ];
+
+        const variants = ['top_30_score_weighted', 'top_50_equal_weighted', 'top_50_score_weighted'];
+        const tbody = document.getElementById('metrics-body');
+        tbody.innerHTML = '';
+
+        for (const [label, key, fmt] of rows) {
+            const tr = document.createElement('tr');
+            tr.className = 'border-b border-gray-800';
+            let html = `<td class="py-3 px-4 text-gray-300">${label}</td>`;
+            for (const v of variants) {
+                const val = metrics[v]?.[key];
+                html += `<td class="py-3 px-4 font-mono">${val !== undefined ? fmt(val) : '—'}</td>`;
+            }
+            // SPY column
+            const spyVal = metrics[variants[0]]?.['spy_' + key.replace('_vs_spy', '')] ??
+                           (key === 'annualized_return' ? metrics[variants[0]]?.spy_annualized_return : null) ??
+                           (key === 'total_return' ? metrics[variants[0]]?.spy_total_return : null);
+            if (spyVal !== undefined && spyVal !== null) {
+                html += `<td class="py-3 px-4 font-mono text-gray-400">${fmt(spyVal)}</td>`;
+            } else {
+                html += `<td class="py-3 px-4 font-mono text-gray-500">—</td>`;
+            }
+            tr.innerHTML = html;
+            tbody.appendChild(tr);
+        }
+    }
+
+    function renderHoldings(holdings) {
+        const primary = holdings.top_50_score_weighted || holdings[Object.keys(holdings)[0]];
+        if (!primary) return;
+
+        const tbody = document.getElementById('holdings-body');
+        tbody.innerHTML = '';
+
+        primary.slice(0, 10).forEach((h, i) => {
+            const tr = document.createElement('tr');
+            tr.className = 'border-b border-gray-800 hover:bg-gray-800/50 transition';
+            tr.innerHTML = `
+                <td class="py-3 px-4 text-gray-500">${i + 1}</td>
+                <td class="py-3 px-4 font-semibold text-brand-500">${h.ticker}</td>
+                <td class="py-3 px-4">${h.company_name || '—'}</td>
+                <td class="py-3 px-4 text-gray-400">${h.sector || '—'}</td>
+                <td class="py-3 px-4 font-mono">${h.composite?.toFixed(3) || '—'}</td>
+                <td class="py-3 px-4 font-mono">${(h.weight * 100).toFixed(1)}%</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function createCheckout() {
+        try {
+            const res = await fetch('/api/create-checkout-session', { method: 'POST' });
+            const data = await res.json();
+            if (data.url) {
+                window.location.href = data.url;
+            } else {
+                alert('Checkout is not configured yet. Set STRIPE_SECRET_KEY to enable payments.');
+            }
+        } catch (e) {
+            alert('Checkout is not available yet. Please try again later.');
+        }
+    }
+
+    loadData();
+    loadPieCharts();
+
+    async function loadPieCharts() {
+        try {
+            const res = await fetch('/api/companies?limit=500');
+            if (!res.ok) return;
+            const data = await res.json();
+            const companies = data.companies || [];
+            if (companies.length === 0) return;
+
+            const sectorCounts = {};
+            companies.forEach(c => { const s = c.sector || 'Unknown'; sectorCounts[s] = (sectorCounts[s] || 0) + 1; });
+            Plotly.newPlot('pie-sector', [{
+                labels: Object.keys(sectorCounts), values: Object.values(sectorCounts),
+                type: 'pie', hole: 0.4, textinfo: 'label+percent', textposition: 'outside',
+                marker: { colors: ['#6366f1','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#f97316','#ec4899','#14b8a6','#84cc16','#a855f7'] },
+            }], { paper_bgcolor: 'transparent', font: { color: '#9ca3af', size: 11 }, margin: { t: 30, b: 30, l: 30, r: 30 }, title: { text: 'By Sector', font: { color: '#d1d5db' } }, showlegend: false }, { responsive: true });
+
+            const quadCounts = {};
+            const quadLabels = { 'high_opp_high_real': 'AI Leaders', 'high_opp_low_real': 'Untapped Potential', 'low_opp_high_real': 'Over-investing?', 'low_opp_low_real': 'AI-Resistant' };
+            companies.forEach(c => { const q = quadLabels[c.quadrant] || 'Unknown'; quadCounts[q] = (quadCounts[q] || 0) + 1; });
+            Plotly.newPlot('pie-quadrant', [{
+                labels: Object.keys(quadCounts), values: Object.values(quadCounts),
+                type: 'pie', hole: 0.4, textinfo: 'label+percent', textposition: 'outside',
+                marker: { colors: ['#22c55e','#eab308','#3b82f6','#6b7280'] },
+            }], { paper_bgcolor: 'transparent', font: { color: '#9ca3af', size: 11 }, margin: { t: 30, b: 30, l: 30, r: 30 }, title: { text: 'By Quadrant', font: { color: '#d1d5db' } }, showlegend: false }, { responsive: true });
+        } catch (e) {
+            console.log('Pie chart data not available yet');
+        }
+    }
+
+    function showLoginModal() {
+        document.getElementById('loginModal').classList.remove('hidden');
+    }
+    function hideLoginModal() {
+        document.getElementById('loginModal').classList.add('hidden');
+    }
+    async function handleLogin(e) {
+        e.preventDefault();
+        const email = document.getElementById('loginEmail').value;
+        const btn = document.getElementById('loginBtn');
+        const msg = document.getElementById('loginMsg');
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+        msg.textContent = '';
+        try {
+            const resp = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email})
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                msg.textContent = 'Check your email for a login link!';
+                msg.className = 'text-sm mt-3 text-green-400';
+            } else {
+                msg.textContent = data.error || 'No account found for that email.';
+                msg.className = 'text-sm mt-3 text-red-400';
+            }
+        } catch {
+            msg.textContent = 'Something went wrong. Please try again.';
+            msg.className = 'text-sm mt-3 text-red-400';
+        }
+        btn.disabled = false;
+        btn.textContent = 'Send Login Link';
+    }
+    </script>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="hidden fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="bg-gray-900 border border-gray-700 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-semibold">Log In</h2>
+                <button onclick="hideLoginModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+            <p class="text-gray-400 text-sm mb-4">Enter your email and we'll send you a link to access your dashboard.</p>
+            <form onsubmit="handleLogin(event)">
+                <input id="loginEmail" type="email" required placeholder="you@example.com"
+                    class="w-full px-4 py-3 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-brand-500 mb-4">
+                <button id="loginBtn" type="submit"
+                    class="w-full bg-brand-600 hover:bg-brand-700 py-3 rounded-lg font-medium transition">Send Login Link</button>
+            </form>
+            <p id="loginMsg" class="text-sm mt-3"></p>
+        </div>
+    </div>
+</body>
+</html>
