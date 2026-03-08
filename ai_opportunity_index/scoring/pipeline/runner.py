@@ -9,6 +9,7 @@ Stage 4: Score — aggregate into CompanyDollarScore
 from __future__ import annotations
 
 import logging
+import math
 
 from ai_opportunity_index.config import (
     DOLLAR_PRODUCTIVITY_GAIN_PCT,
@@ -19,6 +20,7 @@ from ai_opportunity_index.config import (
     RAW_DIR,
 )
 from ai_opportunity_index.data.industry_mappings import sic_to_soc_groups
+from ai_opportunity_index.domains import Quadrant
 from ai_opportunity_index.scoring.evidence_classification import (
     CaptureStage,
     TargetDimension,
@@ -197,8 +199,9 @@ class ScoringPipeline:
         cost_ratio = cost_3yr / max(cost_opp_usd, 1.0)
         rev_ratio = revenue_3yr / max(rev_opp_usd, 1.0)
 
-        # Normalize to 0-1 for quadrant (cap at 1.0)
-        opp_norm = min(1.0, (cost_opp_usd + rev_opp_usd) / max(cost_opp_usd + rev_opp_usd, 1.0))
+        # Normalize to 0-1 using log scale: $1M→0.67, $10M→0.78, $100M→0.89, $1B→1.0
+        total_opp = cost_opp_usd + rev_opp_usd
+        opp_norm = min(1.0, math.log10(max(total_opp, 1.0)) / math.log10(1e9)) if total_opp > 0 else 0.0
         real_norm = min(1.0, (cost_ratio + rev_ratio) / 2.0)
 
         quadrant, quadrant_label = self._assign_quadrant(opp_norm, real_norm)
@@ -254,13 +257,13 @@ class ScoringPipeline:
         """Assign quadrant based on normalized scores."""
         if opportunity >= QUADRANT_OPP_THRESHOLD:
             if realization >= QUADRANT_REAL_THRESHOLD:
-                q = "high_opp_high_real"
+                q = Quadrant.HIGH_OPP_HIGH_REAL
             else:
-                q = "high_opp_low_real"
+                q = Quadrant.HIGH_OPP_LOW_REAL
         else:
             if realization >= QUADRANT_REAL_THRESHOLD:
-                q = "low_opp_high_real"
+                q = Quadrant.LOW_OPP_HIGH_REAL
             else:
-                q = "low_opp_low_real"
+                q = Quadrant.LOW_OPP_LOW_REAL
 
         return q, QUADRANT_LABELS[q]

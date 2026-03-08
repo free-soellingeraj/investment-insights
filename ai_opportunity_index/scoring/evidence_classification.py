@@ -7,21 +7,11 @@ Every piece of evidence is classified on two axes:
 
 from __future__ import annotations
 
-from enum import Enum
-
 from pydantic import BaseModel, Field
 
+from ai_opportunity_index.domains import CaptureStage, TargetDimension
 
-class TargetDimension(str, Enum):
-    COST = "cost"
-    REVENUE = "revenue"
-    GENERAL = "general"  # unspecified AI investment — does NOT inflate cost/revenue capture
-
-
-class CaptureStage(str, Enum):
-    PLANNED = "planned"    # announced plans/intentions
-    INVESTED = "invested"  # actual spending/hiring/filing
-    REALIZED = "realized"  # announced results/savings/revenue
+__all__ = ["TargetDimension", "CaptureStage", "ClassifiedEvidence", "ClassifiedScorerOutput"]
 
 
 class ClassifiedEvidence(BaseModel):

@@ -7,11 +7,20 @@ Guarded behind --use-llm flag; not active in default prototype.
 from __future__ import annotations
 
 import logging
-from typing import Literal
 
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator
 
 from ai_opportunity_index.config import LLM_ESTIMATION_MODEL
+from ai_opportunity_index.domains import HorizonShape
+
+
+def _lower_strip(v: str) -> str:
+    """Normalize LLM enum output to lowercase."""
+    if isinstance(v, str):
+        return v.strip().lower()
+    return v
 from ai_opportunity_index.prompts import load_prompt
 from ai_opportunity_index.scoring.pipeline.base import DollarEstimator
 from ai_opportunity_index.scoring.pipeline.models import (
@@ -29,7 +38,7 @@ class DollarEstimate(BaseModel):
     year_1_pct: float  # % of full impact realized in year 1
     year_2_pct: float
     year_3_pct: float
-    horizon_shape: Literal["flat", "linear_ramp", "s_curve", "back_loaded"]
+    horizon_shape: Annotated[HorizonShape, BeforeValidator(_lower_strip)]
     rationale: str
 
 

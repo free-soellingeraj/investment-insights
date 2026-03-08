@@ -9,13 +9,14 @@ import logging
 import re
 import time
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from xml.etree import ElementTree
 
 import feedparser
 import requests
 
 from ai_opportunity_index.config import RAW_DIR
+from ai_opportunity_index.domains import CollectedItem, SourceAuthority
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ def search_company_news(
     ticker: str,
     days_back: int = 90,
     api_key: str | None = None,
-) -> list[dict]:
+    since_date: datetime | None = None,
+) -> list[CollectedItem]:
     """Search for recent news about a company using free APIs.
 
     Priority:
@@ -42,9 +44,14 @@ def search_company_news(
     2. Google News RSS (free, no key needed) -- primary free source
     3. SEC EDGAR EFTS 8-K full-text search (supplementary)
 
-    Returns list of dicts with: title, description, url, published_at, source.
+    If since_date is set, computes days_back from that date.
+
+    Returns list of CollectedItem objects.
     """
-    articles = []
+    if since_date:
+        days_back = max(1, (datetime.utcnow() - since_date).days)
+
+    articles: list[dict] = []
 
     # Try GNews first if API key is available
     if api_key:
@@ -63,7 +70,45 @@ def search_company_news(
             if sa["title"].lower()[:50] not in existing_titles:
                 articles.append(sa)
 
-    return articles
+    # Convert to CollectedItem
+    today = date.today()
+    items: list[CollectedItem] = []
+    for a in articles:
+        source_date = _parse_article_date(a.get("published_at"))
+        source_name = a.get("source", "")
+        items.append(CollectedItem(
+            item_id=a.get("url") or f"{ticker}_{a.get('title', '')[:50]}",
+            title=a.get("title", ""),
+            content=f"{a.get('title', '')}\n{a.get('description', '')}".strip(),
+            author=source_name or None,  # RSS doesn't give individual bylines
+            author_role="journalist" if source_name else None,
+            author_affiliation=source_name or None,
+            publisher=source_name or None,
+            url=a.get("url"),
+            source_date=source_date,
+            access_date=today,
+            authority=SourceAuthority.THIRD_PARTY_JOURNALISM,
+            metadata={
+                "raw_title": a.get("title", ""),
+                "raw_published": a.get("published_at", ""),
+                "description": a.get("description", ""),
+            },
+        ))
+    return items
+
+
+def _parse_article_date(s: str | None) -> date | None:
+    """Parse a date string from news article, returning None on failure."""
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except (ValueError, TypeError):
+        pass
+    try:
+        return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").date()
+    except (ValueError, TypeError):
+        return None
 
 
 def _search_google_news_rss(

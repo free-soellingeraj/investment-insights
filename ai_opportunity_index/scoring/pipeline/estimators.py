@@ -55,7 +55,7 @@ def load_bls_salaries() -> dict[str, float]:
     return salaries
 
 
-def _get_sector_avg_salary(sector: str | None, soc_groups: list[str] | None = None) -> float:
+def get_sector_avg_salary(sector: str | None, soc_groups: list[str] | None = None) -> float:
     """Get average salary for a sector/SOC group mix."""
     salaries = load_bls_salaries()
     if soc_groups:
@@ -79,7 +79,7 @@ def _get_sector_avg_salary(sector: str | None, soc_groups: list[str] | None = No
     return sector_defaults.get(sector or "", 55_000)
 
 
-def _get_ai_applicability(soc_groups: list[str] | None = None) -> float:
+def get_ai_applicability(soc_groups: list[str] | None = None) -> float:
     """Get average AI applicability for a set of SOC groups."""
     if not soc_groups:
         return OPP_DEFAULT_SOC_SCORE
@@ -177,8 +177,8 @@ class FormulaDollarEstimator(DollarEstimator):
         sector = financials.get("sector")
         soc_groups = financials.get("soc_groups", [])
 
-        avg_salary = _get_sector_avg_salary(sector, soc_groups)
-        ai_applicability = _get_ai_applicability(soc_groups)
+        avg_salary = get_sector_avg_salary(sector, soc_groups)
+        ai_applicability = get_ai_applicability(soc_groups)
 
         # Base annual cost savings potential
         base_annual = employees * avg_salary * ai_applicability * DOLLAR_PRODUCTIVITY_GAIN_PCT
@@ -258,8 +258,8 @@ class FormulaDollarEstimator(DollarEstimator):
         soc_groups = financials.get("soc_groups", [])
 
         # Use a blend of cost and revenue estimation
-        avg_salary = _get_sector_avg_salary(sector, soc_groups)
-        ai_applicability = _get_ai_applicability(soc_groups)
+        avg_salary = get_sector_avg_salary(sector, soc_groups)
+        ai_applicability = get_ai_applicability(soc_groups)
 
         cost_component = employees * avg_salary * ai_applicability * DOLLAR_PRODUCTIVITY_GAIN_PCT * 0.5
         revenue_component = revenue * DOLLAR_REVENUE_PENETRATION_RATE * 0.5

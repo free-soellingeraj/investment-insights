@@ -6,17 +6,19 @@ from typing import Any
 
 import resend
 import stripe
-from litestar import Litestar, Request, get, post
+from litestar import Litestar, Request, get, post, put
 from litestar.response import File, Redirect, Template
 from litestar.static_files import create_static_files_router
 from litestar.status_codes import HTTP_400_BAD_REQUEST, HTTP_403_FORBIDDEN, HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR, HTTP_503_SERVICE_UNAVAILABLE
 
 from ai_opportunity_index.config import PROCESSED_DIR
-from ai_opportunity_index.domains import AIOpportunityEvidence, PipelineSubtask, PipelineTask, RefreshRequest
+from ai_opportunity_index.domains import AIOpportunityEvidence, CompanyRecord, CompanyUpdate, PipelineSubtask, PipelineTask, RefreshRequest, RunStatus
 from ai_opportunity_index.storage.db import (
     create_notification,
     create_refresh_request,
     create_subscriber,
+    get_ai_index_rank,
+    get_company_by_slug,
     get_company_by_ticker,
     get_company_detail,
     get_company_valuation_detail,
@@ -30,6 +32,7 @@ from ai_opportunity_index.storage.db import (
     update_subscriber_status,
 )
 from ai_opportunity_index.domains import Notification
+from web.pipeline_controller import PipelineAPIController
 from web.config import (
     ADMIN_EMAIL,
     BASE_URL,
@@ -364,8 +367,8 @@ async def api_status() -> dict:
         task_summary = []
         for task in PipelineTask:
             task_runs = [r for r in pipeline_runs if r.task == task.value]
-            running = [r for r in task_runs if r.status == "running"]
-            completed = [r for r in task_runs if r.status == "completed"]
+            running = [r for r in task_runs if r.status == RunStatus.RUNNING]
+            completed = [r for r in task_runs if r.status == RunStatus.COMPLETED]
             latest = task_runs[0] if task_runs else None
             task_summary.append({
                 "task": task.value,
@@ -378,7 +381,7 @@ async def api_status() -> dict:
                     if completed and completed[0].completed_at else None
                 ),
                 "last_status": latest.status if latest else None,
-                "last_error": latest.error_message if latest and latest.status == "failed" else None,
+                "last_error": latest.error_message if latest and latest.status == RunStatus.FAILED else None,
             })
 
         # Flatten for recent_runs: all runs sorted by time
@@ -905,7 +908,8 @@ async def api_status_company_detail(ticker: str) -> dict:
             SELECT evidence_type, evidence_subtype, source_name, source_url,
                    source_date, target_dimension, capture_stage,
                    LEFT(source_excerpt, 200) AS excerpt,
-                   payload, observed_at
+                   payload, observed_at,
+                   source_author, source_publisher, source_access_date, source_authority
             FROM evidence
             WHERE company_id = :cid
             ORDER BY evidence_type, observed_at DESC
@@ -926,6 +930,10 @@ async def api_status_company_detail(ticker: str) -> dict:
                 "excerpt": r.excerpt,
                 "dollar_usd": r.payload.get("dollar_estimate_usd") if r.payload else None,
                 "observed_at": r.observed_at.isoformat(),
+                "source_author": r.source_author,
+                "source_publisher": r.source_publisher,
+                "source_access_date": r.source_access_date.isoformat() if r.source_access_date else None,
+                "source_authority": r.source_authority,
             })
 
         # Score: latest scores
@@ -2246,7 +2254,12 @@ async def dashboard(request: Request) -> Any:
 
 @get("/company/{ticker:str}")
 async def company_profile(request: Request, ticker: str) -> Any:
-    """Full-page company profile — opens in new tab from dashboard."""
+    """Full-page company profile — opens in new tab from dashboard.
+
+    Child share-class tickers (e.g. GOOG) render the same page template;
+    the API resolves to canonical data and includes alias metadata so the
+    frontend can show a secondary-listing banner.
+    """
     from litestar.response import Response
     token = request.query_params.get("token", "")
     # Auth check (same as dashboard)
@@ -2302,18 +2315,37 @@ async def api_company_detail(ticker: str) -> dict:
     if not detail:
         return {"error": "Company not found"}
 
-    # Attach cached enrichment data from disk
+    # Attach cached enrichment data from disk (canonical ticker/slug + children)
+    primary_ident = detail["ticker"] or detail.get("slug")
+    all_idents = [primary_ident] if primary_ident else []
+    all_idents.extend(detail.get("child_tickers") or [])
     enrichment = {}
     for source in ("github", "analysts", "web_enrichment"):
-        cache_path = RAW_DIR / source / f"{ticker.upper()}.json"
-        if cache_path.exists():
-            try:
-                enrichment[source] = _json.loads(cache_path.read_text())
-            except Exception:
-                enrichment[source] = None
-        else:
+        for t in all_idents:
+            if not t:
+                continue
+            cache_path = RAW_DIR / source / f"{t.upper()}.json"
+            if cache_path.exists():
+                try:
+                    data = _json.loads(cache_path.read_text())
+                    if source not in enrichment:
+                        enrichment[source] = data
+                    elif source == "web_enrichment":
+                        # Merge child web enrichment sections
+                        for key in ("careers", "investor_relations", "blog"):
+                            if data.get(key) and not enrichment[source].get(key):
+                                enrichment[source][key] = data[key]
+                except Exception:
+                    pass
+        if source not in enrichment:
             enrichment[source] = None
     detail["enrichment"] = enrichment
+
+    # Add AI Index rank across the scored universe (use canonical ticker)
+    rank_info = get_ai_index_rank(detail["ticker"] or detail.get("slug", ""))
+    detail["ai_index_rank"] = rank_info["rank"]
+    detail["ai_index_total"] = rank_info["total"]
+
     return detail
 
 
@@ -2331,6 +2363,89 @@ async def api_company_valuations(ticker: str) -> dict:
     if not detail:
         return {"error": "No valuation data found", "ticker": ticker.upper()}
     return detail
+
+
+
+# Pipeline status, run-stage, cancel-run, and runs endpoints are now in
+# web/pipeline_controller.py (PipelineAPIController).
+
+
+
+def _company_record_from_row(row) -> CompanyRecord:
+    """Build a CompanyRecord from a DB row."""
+    return CompanyRecord(
+        id=row.id,
+        ticker=row.ticker,
+        slug=row.slug,
+        company_name=row.company_name,
+        exchange=row.exchange,
+        sector=row.sector,
+        industry=row.industry,
+        github_url=row.github_url,
+        careers_url=row.careers_url,
+        ir_url=row.ir_url,
+        blog_url=row.blog_url,
+        is_active=row.is_active,
+        updated_at=row.updated_at,
+    )
+
+
+@get("/api/companies/{ticker:str}/links")
+async def api_company_links(ticker: str) -> dict:
+    """Get company record with links."""
+    from ai_opportunity_index.storage.models import CompanyModel
+
+    with get_session() as session:
+        row = session.query(CompanyModel).filter(CompanyModel.ticker == ticker.upper()).first()
+        if not row:
+            row = session.query(CompanyModel).filter(CompanyModel.slug == ticker.upper()).first()
+        if not row:
+            return {"error": "Company not found"}
+        record = _company_record_from_row(row)
+
+    return record.model_dump()
+
+
+@put("/api/companies/{ticker:str}/links")
+async def api_update_company_links(ticker: str, data: CompanyUpdate) -> dict:
+    """Update company fields. Returns the updated company record."""
+    from sqlalchemy import text as sa_text
+    from ai_opportunity_index.storage.models import CompanyModel
+
+    company = get_company_by_ticker(ticker)
+    if not company:
+        return {"error": "Company not found"}
+
+    # Only apply fields that were explicitly provided (not just defaulting to None)
+    provided = data.model_dump(exclude_unset=True)
+    if not provided:
+        return {"error": "No fields provided"}
+
+    # Only allow safe fields to be updated
+    allowed = {"company_name", "ticker", "exchange", "sector", "industry",
+               "github_url", "careers_url", "ir_url", "blog_url"}
+    updates = {}
+    for k, v in provided.items():
+        if k in allowed:
+            updates[k] = v if v else None
+
+    if not updates:
+        return {"error": "No updatable fields provided"}
+
+    with get_session() as session:
+        set_clauses = ", ".join(f"{k} = :{k}" for k in updates)
+        updates["cid"] = company.id
+        session.execute(
+            sa_text(f"UPDATE companies SET {set_clauses}, updated_at = now() WHERE id = :cid"),
+            updates,
+        )
+        session.commit()
+
+        # Return the updated record
+        row = session.get(CompanyModel, company.id)
+        record = _company_record_from_row(row)
+
+    return record.model_dump()
 
 
 @post("/api/companies/{ticker:str}/refresh")
@@ -2423,6 +2538,9 @@ app = Litestar(
         api_company_detail,
         api_company_peers,
         api_company_valuations,
+        PipelineAPIController,
+        api_company_links,
+        api_update_company_links,
         api_request_refresh,
         api_portfolio,
     ],

@@ -20,24 +20,30 @@ from ai_opportunity_index.domains import (
     CaptureDetails,
     Company,
     CompanyScore,
+    CompanyVenture,
     EvidenceGroup,
     EvidenceGroupPassage,
     FinancialObservation,
     InvestmentDetails,
     Notification,
+    NotificationStatus,
     PipelineRun,
     PlanDetails,
     RefreshRequest,
+    RefreshStatus,
+    RunStatus,
     ScoreChange,
     Subscriber,
     Valuation,
     ValuationDiscrepancy,
+    ValuationStage,
 )
 from ai_opportunity_index.storage.models import (
     Base,
     CaptureDetailModel,
     CompanyModel,
     CompanyScoreModel,
+    CompanyVentureModel,
     EvidenceGroupModel,
     EvidenceGroupPassageModel,
     EvidenceModel,
@@ -85,6 +91,13 @@ def init_db():
     logger.info("Database initialized at %s", DATABASE_URL)
 
 
+def _slugify(name: str) -> str:
+    """Convert a company name to a URL-safe slug (uppercase, max 50 chars)."""
+    import re
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name.strip()).strip("-").upper()
+    return slug[:50] if slug else "UNKNOWN"
+
+
 # ── Company CRUD ──────────────────────────────────────────────────────────
 
 
@@ -95,13 +108,21 @@ def upsert_company(data: Company | dict) -> Company:
 
     session = get_session()
     try:
-        existing = session.execute(
-            select(CompanyModel).where(CompanyModel.ticker == data.ticker)
-        ).scalar_one_or_none()
+        existing = None
+        if data.ticker:
+            existing = session.execute(
+                select(CompanyModel).where(CompanyModel.ticker == data.ticker)
+            ).scalar_one_or_none()
+        if existing is None and data.slug:
+            existing = session.execute(
+                select(CompanyModel).where(CompanyModel.slug == data.slug)
+            ).scalar_one_or_none()
 
         if existing is None:
+            slug = data.slug or (data.ticker.upper() if data.ticker else _slugify(data.company_name or "unknown"))
             model = CompanyModel(
                 ticker=data.ticker,
+                slug=slug,
                 exchange=data.exchange,
                 company_name=data.company_name,
                 cik=data.cik,
@@ -135,17 +156,26 @@ def upsert_company(data: Company | dict) -> Company:
 
 def upsert_company_in_session(session: Session, data: dict) -> CompanyModel:
     """Insert or update a company within an existing session (for bulk ops)."""
-    existing = session.execute(
-        select(CompanyModel).where(CompanyModel.ticker == data["ticker"])
-    ).scalar_one_or_none()
+    ticker = data.get("ticker")
+    existing = None
+    if ticker:
+        existing = session.execute(
+            select(CompanyModel).where(CompanyModel.ticker == ticker)
+        ).scalar_one_or_none()
+    if existing is None and data.get("slug"):
+        existing = session.execute(
+            select(CompanyModel).where(CompanyModel.slug == data["slug"])
+        ).scalar_one_or_none()
 
     if existing is None:
+        if "slug" not in data or not data["slug"]:
+            data["slug"] = (ticker.upper() if ticker else _slugify(data.get("company_name", "unknown")))
         model = CompanyModel(**{k: v for k, v in data.items() if k != "id"})
         session.add(model)
     else:
         model = existing
         for key, value in data.items():
-            if key != "id" and value is not None:
+            if key not in ("id", "slug") and value is not None:
                 setattr(model, key, value)
     return model
 
@@ -177,23 +207,243 @@ def upsert_companies_bulk(df: pd.DataFrame) -> int:
     return count
 
 
-def get_company_by_ticker(ticker: str) -> Company | None:
-    """Look up a company by ticker."""
+def get_company_by_ticker(ticker: str, resolve_alias: bool = True) -> Company | None:
+    """Look up a company by ticker (or slug fallback).
+
+    If resolve_alias is True and the ticker is a child share class,
+    returns the canonical (parent) company instead.
+    """
     session = get_session()
     try:
         model = session.execute(
             select(CompanyModel).where(CompanyModel.ticker == ticker.upper())
         ).scalar_one_or_none()
-        return _company_from_model(model) if model else None
+        if not model:
+            # Fallback: try slug lookup for tickerless subsidiaries
+            model = session.execute(
+                select(CompanyModel).where(CompanyModel.slug == ticker.upper())
+            ).scalar_one_or_none()
+        if not model:
+            return None
+        if resolve_alias and model.canonical_company_id:
+            parent = session.get(CompanyModel, model.canonical_company_id)
+            if parent:
+                return _company_from_model(parent)
+        return _company_from_model(model)
     finally:
         session.close()
 
 
-def get_company_model_by_ticker(session: Session, ticker: str) -> CompanyModel | None:
-    """Look up a CompanyModel by ticker within a session."""
-    return session.execute(
+def get_company_model_by_ticker(
+    session: Session, ticker: str, resolve_alias: bool = True,
+) -> CompanyModel | None:
+    """Look up a CompanyModel by ticker within a session.
+
+    If resolve_alias is True and the ticker is a child share class,
+    returns the canonical (parent) CompanyModel instead.
+    """
+    model = session.execute(
         select(CompanyModel).where(CompanyModel.ticker == ticker.upper())
     ).scalar_one_or_none()
+    if not model:
+        return None
+    if resolve_alias and model.canonical_company_id:
+        parent = session.get(CompanyModel, model.canonical_company_id)
+        if parent:
+            return parent
+    return model
+
+
+# ── Company Ventures ─────────────────────────────────────────────────────
+
+
+def get_or_create_company_by_slug(
+    slug: str, company_name: str, ticker: str | None = None,
+    **extra_fields,
+) -> Company:
+    """Find an existing company by slug or create a new one.
+
+    Extra keyword arguments (e.g. sector, industry, exchange, country)
+    are set on the model at creation time, and also used to fill in
+    blank fields on an existing record.
+    """
+    ALLOWED_FIELDS = {"sector", "industry", "exchange", "country", "ir_url",
+                      "github_url", "careers_url", "blog_url"}
+    filtered = {k: v for k, v in extra_fields.items() if k in ALLOWED_FIELDS and v}
+    session = get_session()
+    try:
+        model = session.execute(
+            select(CompanyModel).where(CompanyModel.slug == slug)
+        ).scalar_one_or_none()
+        if model is None:
+            model = CompanyModel(
+                ticker=ticker,
+                slug=slug,
+                company_name=company_name,
+                is_active=True,
+                **filtered,
+            )
+            session.add(model)
+            session.commit()
+            session.refresh(model)
+        else:
+            # Fill in any blank fields on existing record
+            changed = False
+            if company_name and not model.company_name:
+                model.company_name = company_name
+                changed = True
+            for attr, val in filtered.items():
+                if not getattr(model, attr, None):
+                    setattr(model, attr, val)
+                    changed = True
+            if changed:
+                session.commit()
+                session.refresh(model)
+        return _company_from_model(model)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def create_company_venture(
+    parent_id: int,
+    subsidiary_id: int,
+    ownership_pct: float | None = None,
+    relationship_type: str = "subsidiary",
+    notes: str | None = None,
+) -> CompanyVenture:
+    """Create or update a venture relationship between parent and subsidiary."""
+    session = get_session()
+    try:
+        existing = session.execute(
+            select(CompanyVentureModel).where(
+                CompanyVentureModel.parent_id == parent_id,
+                CompanyVentureModel.subsidiary_id == subsidiary_id,
+            )
+        ).scalar_one_or_none()
+        if existing:
+            if ownership_pct is not None:
+                existing.ownership_pct = ownership_pct
+            if relationship_type:
+                existing.relationship_type = relationship_type
+            if notes is not None:
+                existing.notes = notes
+            model = existing
+        else:
+            model = CompanyVentureModel(
+                parent_id=parent_id,
+                subsidiary_id=subsidiary_id,
+                ownership_pct=ownership_pct,
+                relationship_type=relationship_type,
+                notes=notes,
+            )
+            session.add(model)
+        session.commit()
+        session.refresh(model)
+        return CompanyVenture(
+            id=model.id,
+            parent_id=model.parent_id,
+            subsidiary_id=model.subsidiary_id,
+            ownership_pct=model.ownership_pct,
+            relationship_type=model.relationship_type,
+            notes=model.notes,
+        )
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_company_subsidiaries(company_id: int) -> list[dict]:
+    """Get subsidiaries for a parent company with score status."""
+    session = get_session()
+    try:
+        ventures = session.execute(
+            select(CompanyVentureModel).where(
+                CompanyVentureModel.parent_id == company_id
+            )
+        ).scalars().all()
+
+        results = []
+        for v in ventures:
+            sub = session.get(CompanyModel, v.subsidiary_id)
+            if not sub:
+                continue
+            has_scores = session.execute(
+                select(CompanyScoreModel.id).where(
+                    CompanyScoreModel.company_id == v.subsidiary_id
+                ).limit(1)
+            ).scalar_one_or_none() is not None
+            latest_score = None
+            if has_scores:
+                score = session.execute(
+                    select(CompanyScoreModel).where(
+                        CompanyScoreModel.company_id == v.subsidiary_id
+                    ).order_by(CompanyScoreModel.scored_at.desc()).limit(1)
+                ).scalar_one_or_none()
+                if score:
+                    latest_score = {
+                        "opportunity": score.opportunity,
+                        "realization": score.realization,
+                    }
+            results.append({
+                "id": sub.id,
+                "ticker": sub.ticker,
+                "slug": sub.slug,
+                "company_name": sub.company_name,
+                "ownership_pct": v.ownership_pct,
+                "relationship_type": v.relationship_type,
+                "has_scores": has_scores,
+                "latest_score": latest_score,
+            })
+        return results
+    finally:
+        session.close()
+
+
+def get_company_parents(company_id: int) -> list[dict]:
+    """Get parent companies for a subsidiary."""
+    session = get_session()
+    try:
+        ventures = session.execute(
+            select(CompanyVentureModel).where(
+                CompanyVentureModel.subsidiary_id == company_id
+            )
+        ).scalars().all()
+
+        results = []
+        for v in ventures:
+            parent = session.get(CompanyModel, v.parent_id)
+            if not parent:
+                continue
+            results.append({
+                "id": parent.id,
+                "ticker": parent.ticker,
+                "slug": parent.slug,
+                "company_name": parent.company_name,
+                "ownership_pct": v.ownership_pct,
+                "relationship_type": v.relationship_type,
+            })
+        return results
+    finally:
+        session.close()
+
+
+def get_company_by_slug(slug: str) -> Company | None:
+    """Look up a company by slug."""
+    session = get_session()
+    try:
+        model = session.execute(
+            select(CompanyModel).where(CompanyModel.slug == slug.upper())
+        ).scalar_one_or_none()
+        if not model:
+            return None
+        return _company_from_model(model)
+    finally:
+        session.close()
 
 
 # ── Evidence ──────────────────────────────────────────────────────────────
@@ -368,6 +618,10 @@ def save_company_score(score: CompanyScore, session: Session | None = None) -> C
             cost_capture_usd=score.cost_capture_usd,
             revenue_capture_usd=score.revenue_capture_usd,
             total_investment_usd=score.total_investment_usd,
+            ai_index_usd=score.ai_index_usd,
+            capture_probability=score.capture_probability,
+            opportunity_usd=score.opportunity_usd,
+            evidence_dollars=score.evidence_dollars,
             flags=score.flags,
             data_as_of=score.data_as_of,
             scored_at=score.scored_at,
@@ -431,6 +685,7 @@ def get_latest_scores(
             "opportunity", "realization", "cost_capture_score", "revenue_capture_score",
             "general_investment_score", "cost_roi", "revenue_roi", "combined_roi",
             "revenue_opp_score", "cost_opp_score", "ticker", "company_name",
+            "ai_index_usd", "opportunity_usd",
         }
         order_col = sort_by if sort_by in allowed_sort else "opportunity"
         order_dir = "DESC" if order_col != "ticker" and order_col != "company_name" else "ASC"
@@ -571,7 +826,7 @@ def create_pipeline_run(run: PipelineRun) -> PipelineRun:
 
 def complete_pipeline_run(
     run_id: str,
-    status: str = "completed",
+    status: RunStatus | str = RunStatus.COMPLETED,
     tickers_succeeded: int = 0,
     tickers_failed: int = 0,
     error_message: str | None = None,
@@ -596,6 +851,62 @@ def complete_pipeline_run(
     except Exception:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+def get_last_daily_refresh_time() -> datetime | None:
+    """Get the most recent completed daily refresh run time.
+
+    Queries pipeline_runs for the most recent completed run where
+    parameters->>'source' = 'daily_refresh'.
+
+    Deprecated: use get_last_completed_run_time() for source-agnostic watermark.
+    """
+    session = get_session()
+    try:
+        model = session.execute(
+            select(PipelineRunModel)
+            .where(PipelineRunModel.status == "completed")
+            .where(PipelineRunModel.parameters["source"].astext == "daily_refresh")
+            .order_by(PipelineRunModel.completed_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if model and model.completed_at:
+            return model.completed_at
+        return None
+    finally:
+        session.close()
+
+
+def get_last_completed_run_time(stages_filter: set[str] | None = None) -> datetime | None:
+    """Source-agnostic watermark: find the most recent completed pipeline run.
+
+    Optionally filtered to runs whose ``parameters.stages_requested`` overlaps
+    the given *stages_filter*.  Any source (CLI, web, daily_refresh, etc.) counts.
+    """
+    session = get_session()
+    try:
+        stmt = (
+            select(PipelineRunModel)
+            .where(PipelineRunModel.status == "completed")
+            .order_by(PipelineRunModel.completed_at.desc())
+            .limit(1)
+        )
+        if stages_filter:
+            # Match runs whose stages_requested list overlaps the filter.
+            # Uses PostgreSQL JSONB array overlap via raw text for simplicity.
+            from sqlalchemy import text as sa_text
+            overlap_values = ",".join(f"'{s}'" for s in stages_filter)
+            stmt = stmt.where(
+                sa_text(
+                    f"parameters->'stages_requested' ?| array[{overlap_values}]"
+                )
+            )
+        model = session.execute(stmt).scalar_one_or_none()
+        if model and model.completed_at:
+            return model.completed_at
+        return None
     finally:
         session.close()
 
@@ -663,7 +974,7 @@ def get_pending_refresh_requests(limit: int = 10) -> list[RefreshRequest]:
         models = (
             session.execute(
                 select(RefreshRequestModel)
-                .where(RefreshRequestModel.status == "pending")
+                .where(RefreshRequestModel.status == RefreshStatus.PENDING)
                 .order_by(RefreshRequestModel.requested_at)
                 .limit(limit)
             )
@@ -676,7 +987,7 @@ def get_pending_refresh_requests(limit: int = 10) -> list[RefreshRequest]:
 
 
 def update_refresh_request_status(
-    request_id: int, status: str, pipeline_run_id: int | None = None
+    request_id: int, status: RefreshStatus | str, pipeline_run_id: int | None = None
 ):
     """Update a refresh request's status."""
     session = get_session()
@@ -684,7 +995,7 @@ def update_refresh_request_status(
         values: dict = {"status": status}
         if pipeline_run_id is not None:
             values["pipeline_run_id"] = pipeline_run_id
-        if status in ("completed", "failed"):
+        if status in (RefreshStatus.COMPLETED, RefreshStatus.FAILED):
             values["completed_at"] = datetime.utcnow()
 
         session.execute(
@@ -732,7 +1043,7 @@ def get_pending_notifications(limit: int = 50) -> list[Notification]:
         models = (
             session.execute(
                 select(NotificationModel)
-                .where(NotificationModel.status == "pending")
+                .where(NotificationModel.status == NotificationStatus.PENDING)
                 .order_by(NotificationModel.created_at)
                 .limit(limit)
             )
@@ -751,7 +1062,7 @@ def mark_notification_sent(notification_id: int):
         session.execute(
             update(NotificationModel)
             .where(NotificationModel.id == notification_id)
-            .values(status="sent")
+            .values(status=NotificationStatus.SENT)
         )
         session.commit()
     except Exception:
@@ -868,16 +1179,50 @@ def update_subscriber_status(stripe_subscription_id: str, new_status: str):
 
 
 def get_company_detail(ticker: str) -> dict | None:
-    """Get full detail for a single company including latest scores and evidence."""
+    """Get full detail for a single company including latest scores and evidence.
+
+    If the ticker is a child share class, resolves to the canonical parent and
+    combines evidence and financials from parent + children.
+    Each evidence item is tagged with ``source_ticker`` so the frontend can
+    show which listing the evidence originated from.
+    """
     session = get_session()
+    requested_ticker = ticker.upper()
     try:
         company = session.execute(
-            select(CompanyModel).where(CompanyModel.ticker == ticker.upper())
+            select(CompanyModel).where(CompanyModel.ticker == requested_ticker)
         ).scalar_one_or_none()
+        # Fallback: try slug lookup for tickerless subsidiaries
+        if not company:
+            company = session.execute(
+                select(CompanyModel).where(CompanyModel.slug == requested_ticker)
+            ).scalar_one_or_none()
         if not company:
             return None
 
-        # Latest score
+        # Track whether the requested ticker is a child alias
+        is_alias = bool(company.canonical_company_id)
+
+        # Resolve alias: if child, use canonical parent
+        if company.canonical_company_id:
+            parent = session.get(CompanyModel, company.canonical_company_id)
+            if parent:
+                company = parent
+
+        # Build list of company_ids to query (parent + children)
+        # and a mapping of company_id → ticker for source labeling
+        company_ids = [company.id]
+        id_to_ticker: dict[int, str] = {company.id: company.ticker}
+        child_tickers: list[str] = []
+        if company.child_ticker_refs:
+            for child_id in company.child_ticker_refs:
+                child = session.get(CompanyModel, child_id)
+                if child:
+                    company_ids.append(child_id)
+                    child_tickers.append(child.ticker)
+                    id_to_ticker[child_id] = child.ticker
+
+        # Latest score (from canonical company)
         score = session.execute(
             select(CompanyScoreModel)
             .where(CompanyScoreModel.company_id == company.id)
@@ -885,11 +1230,11 @@ def get_company_detail(ticker: str) -> dict | None:
             .limit(1)
         ).scalar_one_or_none()
 
-        # All evidence
+        # All evidence from parent + children
         evidence_models = (
             session.execute(
                 select(EvidenceModel)
-                .where(EvidenceModel.company_id == company.id)
+                .where(EvidenceModel.company_id.in_(company_ids))
                 .order_by(EvidenceModel.observed_at.desc())
             )
             .scalars()
@@ -918,10 +1263,16 @@ def get_company_detail(ticker: str) -> dict | None:
                 "valid_from": str(ev.valid_from) if ev.valid_from else None,
                 "valid_to": str(ev.valid_to) if ev.valid_to else None,
                 "pipeline_run_id": ev.pipeline_run_id,
+                "source_ticker": id_to_ticker.get(ev.company_id, company.ticker),
             })
 
-        # Fetch latest financial observations
+        # Fetch latest financial observations — prefer parent, fill gaps from children
         latest_financials = _get_latest_financials_in_session(session, company.id)
+        for child_id in company_ids[1:]:
+            child_financials = _get_latest_financials_in_session(session, child_id)
+            for metric, obs_model in child_financials.items():
+                if metric not in latest_financials:
+                    latest_financials[metric] = obs_model
 
         financials_dict = {}
         for metric, obs_model in latest_financials.items():
@@ -934,13 +1285,106 @@ def get_company_detail(ticker: str) -> dict | None:
                 "fiscal_period": obs_model.fiscal_period,
             }
 
-        return {
+        # Query subsidiaries with pipeline completion status
+        subsidiaries = []
+        ventures = session.execute(
+            select(CompanyVentureModel).where(
+                CompanyVentureModel.parent_id == company.id
+            )
+        ).scalars().all()
+        for v in ventures:
+            sub = session.get(CompanyModel, v.subsidiary_id)
+            if not sub:
+                continue
+            sub_score = session.execute(
+                select(CompanyScoreModel).where(
+                    CompanyScoreModel.company_id == v.subsidiary_id
+                ).order_by(CompanyScoreModel.scored_at.desc()).limit(1)
+            ).scalar_one_or_none()
+
+            # Pipeline completion: check milestones
+            has_links = bool(sub.github_url or sub.careers_url or sub.ir_url or sub.blog_url)
+            has_evidence = session.execute(
+                select(EvidenceModel.id).where(
+                    EvidenceModel.company_id == v.subsidiary_id
+                ).limit(1)
+            ).scalar_one_or_none() is not None
+            has_groups = session.execute(
+                select(EvidenceGroupModel.id).where(
+                    EvidenceGroupModel.company_id == v.subsidiary_id
+                ).limit(1)
+            ).scalar_one_or_none() is not None
+            has_scores = sub_score is not None
+
+            # Milestones: links, evidence, groups/valuations, scores
+            milestones_done = sum([has_links, has_evidence, has_groups, has_scores])
+            pipeline_pct = round(milestones_done / 4 * 100)
+
+            # Last activity: most recent pipeline run or updated_at
+            last_run = session.execute(
+                select(PipelineRunModel.completed_at).where(
+                    PipelineRunModel.tickers_requested.any(sub.ticker or sub.slug)
+                ).order_by(PipelineRunModel.completed_at.desc()).limit(1)
+            ).scalar_one_or_none() if (sub.ticker or sub.slug) else None
+            last_checked = last_run or sub.updated_at
+
+            subsidiaries.append({
+                "id": sub.id,
+                "ticker": sub.ticker,
+                "slug": sub.slug,
+                "company_name": sub.company_name,
+                "sector": sub.sector,
+                "industry": sub.industry,
+                "ownership_pct": v.ownership_pct,
+                "relationship_type": v.relationship_type,
+                "has_links": has_links,
+                "has_evidence": has_evidence,
+                "has_groups": has_groups,
+                "has_scores": has_scores,
+                "pipeline_pct": pipeline_pct,
+                "last_checked": str(last_checked) if last_checked else None,
+                "created_at": str(sub.created_at) if sub.created_at else None,
+                "latest_score": {
+                    "opportunity": sub_score.opportunity,
+                    "realization": sub_score.realization,
+                    "quadrant_label": sub_score.quadrant_label,
+                } if sub_score else None,
+            })
+
+        # Query parent companies (if this is a subsidiary)
+        parents = []
+        parent_ventures = session.execute(
+            select(CompanyVentureModel).where(
+                CompanyVentureModel.subsidiary_id == company.id
+            )
+        ).scalars().all()
+        for v in parent_ventures:
+            p = session.get(CompanyModel, v.parent_id)
+            if not p:
+                continue
+            parents.append({
+                "id": p.id,
+                "ticker": p.ticker,
+                "slug": p.slug,
+                "company_name": p.company_name,
+                "ownership_pct": v.ownership_pct,
+                "relationship_type": v.relationship_type,
+            })
+
+        result = {
             "ticker": company.ticker,
+            "slug": company.slug,
+            "requested_ticker": requested_ticker,
+            "is_alias": is_alias,
+            "canonical_ticker": company.ticker if is_alias else None,
             "company_name": company.company_name,
             "exchange": company.exchange,
             "sic": company.sic,
             "sector": company.sector,
             "industry": company.industry,
+            "child_tickers": child_tickers,
+            "subsidiaries": subsidiaries,
+            "parent_companies": parents,
             "financials": financials_dict,
             "scores": {
                 "revenue_opp": score.revenue_opp_score if score else None,
@@ -966,11 +1410,45 @@ def get_company_detail(ticker: str) -> dict | None:
                 "cost_capture_usd": score.cost_capture_usd if score else None,
                 "revenue_capture_usd": score.revenue_capture_usd if score else None,
                 "total_investment_usd": score.total_investment_usd if score else None,
+                "ai_index_usd": score.ai_index_usd if score else None,
+                "capture_probability": score.capture_probability if score else None,
+                "opportunity_usd": score.opportunity_usd if score else None,
+                "evidence_dollars": score.evidence_dollars if score else None,
                 "data_as_of": str(score.data_as_of) if score else None,
                 "scored_at": str(score.scored_at) if score else None,
             },
+            "flags": score.flags if score else [],
             "evidence": evidence_by_type,
         }
+        return result
+    finally:
+        session.close()
+
+
+def get_ai_index_rank(ticker: str) -> dict:
+    """Compute the AI Index rank for a company across the scored universe.
+
+    Returns {"rank": N, "total": M} or {"rank": None, "total": 0}.
+    """
+    session = get_session()
+    try:
+        result = session.execute(
+            text(
+                "SELECT ticker, ai_index_usd FROM latest_company_scores "
+                "WHERE ai_index_usd IS NOT NULL "
+                "ORDER BY ai_index_usd DESC"
+            )
+        )
+        rows = result.fetchall()
+        if not rows:
+            return {"rank": None, "total": 0}
+
+        ticker_upper = ticker.upper()
+        for i, row in enumerate(rows):
+            if row[0] == ticker_upper:
+                return {"rank": i + 1, "total": len(rows)}
+
+        return {"rank": None, "total": len(rows)}
     finally:
         session.close()
 
@@ -1123,6 +1601,7 @@ def _company_from_model(m: CompanyModel) -> Company:
     return Company(
         id=m.id,
         ticker=m.ticker,
+        slug=m.slug,
         exchange=m.exchange,
         company_name=m.company_name,
         cik=m.cik,
@@ -1132,6 +1611,8 @@ def _company_from_model(m: CompanyModel) -> Company:
         sector=m.sector,
         industry=m.industry,
         is_active=m.is_active,
+        child_ticker_refs=m.child_ticker_refs,
+        canonical_company_id=m.canonical_company_id,
         created_at=m.created_at,
         updated_at=m.updated_at,
     )
@@ -1199,6 +1680,10 @@ def _score_from_model(m: CompanyScoreModel) -> CompanyScore:
         cost_capture_usd=m.cost_capture_usd,
         revenue_capture_usd=m.revenue_capture_usd,
         total_investment_usd=m.total_investment_usd,
+        ai_index_usd=m.ai_index_usd,
+        capture_probability=m.capture_probability,
+        opportunity_usd=m.opportunity_usd,
+        evidence_dollars=m.evidence_dollars,
         opportunity=m.opportunity,
         realization=m.realization,
         quadrant=m.quadrant,
@@ -1308,6 +1793,11 @@ def save_evidence_group(
                 capture_stage=p.capture_stage,
                 source_url=p.source_url,
                 source_author=p.source_author,
+                source_author_role=p.source_author_role,
+                source_author_affiliation=p.source_author_affiliation,
+                source_publisher=p.source_publisher,
+                source_access_date=p.source_access_date,
+                source_authority=p.source_authority.value if p.source_authority else None,
             )
             s.add(pm)
 
@@ -1524,7 +2014,7 @@ def get_final_valuations_for_company(
             .join(EvidenceGroupModel)
             .filter(
                 EvidenceGroupModel.company_id == company_id,
-                ValuationModel.stage == "final",
+                ValuationModel.stage == ValuationStage.FINAL,
             )
         )
         if pipeline_run_id is not None:
@@ -1587,14 +2077,35 @@ def get_company_valuation_detail(ticker: str) -> dict | None:
 
     Returns dict organized by dimension -> groups -> valuation + passages,
     with dimension aggregates and pipeline summary counts.
+    Resolves child share-class aliases to the canonical parent.
     """
     session = get_session()
+    requested_ticker = ticker.upper()
     try:
         company = session.execute(
-            select(CompanyModel).where(CompanyModel.ticker == ticker.upper())
+            select(CompanyModel).where(CompanyModel.ticker == requested_ticker)
         ).scalar_one_or_none()
         if not company:
+            company = session.execute(
+                select(CompanyModel).where(CompanyModel.slug == requested_ticker)
+            ).scalar_one_or_none()
+        if not company:
             return None
+
+        # Resolve alias: if child, use canonical parent
+        is_alias = bool(company.canonical_company_id)
+        if company.canonical_company_id:
+            parent = session.get(CompanyModel, company.canonical_company_id)
+            if parent:
+                company = parent
+
+        # Build child tickers list
+        child_tickers: list[str] = []
+        if company.child_ticker_refs:
+            for child_id in company.child_ticker_refs:
+                child = session.get(CompanyModel, child_id)
+                if child:
+                    child_tickers.append(child.ticker)
 
         # Load evidence groups with passages
         group_models = (
@@ -1612,7 +2123,7 @@ def get_company_valuation_detail(ticker: str) -> dict | None:
             .join(EvidenceGroupModel)
             .filter(
                 EvidenceGroupModel.company_id == company.id,
-                ValuationModel.stage == "final",
+                ValuationModel.stage == ValuationStage.FINAL,
             )
             .all()
         )
@@ -1674,6 +2185,11 @@ def get_company_valuation_detail(ticker: str) -> dict | None:
                     "capture_stage": p.capture_stage,
                     "source_url": p.source_url,
                     "source_author": p.source_author,
+                    "source_author_role": p.source_author_role,
+                    "source_author_affiliation": p.source_author_affiliation,
+                    "source_publisher": p.source_publisher,
+                    "source_access_date": str(p.source_access_date) if p.source_access_date else None,
+                    "source_authority": p.source_authority,
                     "scraped_at": p.created_at.isoformat() if p.created_at else None,
                 })
 
@@ -1793,12 +2309,33 @@ def get_company_valuation_detail(ticker: str) -> dict | None:
                 dim_data["dimension_score"] = 0.0
                 dim_data["group_count"] = 0
 
+        # Compute per-stage dollar_mid sums for evidence basis display
+        plan_dollars = 0.0
+        investment_dollars = 0.0
+        capture_dollars = 0.0
+        for gm in group_models:
+            vm = val_by_group.get(gm.id)
+            if vm and vm.dollar_mid:
+                if vm.evidence_type == "plan":
+                    plan_dollars += vm.dollar_mid
+                elif vm.evidence_type == "investment":
+                    investment_dollars += vm.dollar_mid
+                elif vm.evidence_type == "capture":
+                    capture_dollars += vm.dollar_mid
+
         return {
-            "ticker": ticker.upper(),
+            "ticker": company.ticker,
+            "requested_ticker": requested_ticker,
+            "is_alias": is_alias,
+            "canonical_ticker": company.ticker if is_alias else None,
+            "child_tickers": child_tickers,
             "total_passages": total_passages,
             "total_groups": total_groups,
             "type_counts": type_counts,
             "dimensions": dimensions,
+            "plan_dollars": round(plan_dollars, 2),
+            "investment_dollars": round(investment_dollars, 2),
+            "capture_dollars": round(capture_dollars, 2),
         }
     finally:
         session.close()

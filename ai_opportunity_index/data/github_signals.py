@@ -7,7 +7,7 @@ No auth required for public data (60 req/hr); with GITHUB_TOKEN: 5000 req/hr.
 import json
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -17,6 +17,7 @@ from ai_opportunity_index.config import (
     GITHUB_TOKEN,
     RAW_DIR,
 )
+from ai_opportunity_index.domains import CollectedItem, SourceAuthority
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,11 @@ def _is_ai_repo(repo: dict) -> bool:
     return False
 
 
-def search_company_github(company_name: str, ticker: str) -> dict:
+def search_company_github(
+    company_name: str,
+    ticker: str,
+    since_date: datetime | None = None,
+) -> dict:
     """Search GitHub for a company's org and AI/ML repos.
 
     Returns dict with:
@@ -126,6 +131,11 @@ def search_company_github(company_name: str, ticker: str) -> dict:
             page += 1
             time.sleep(GITHUB_RATE_LIMIT_SECONDS)
 
+        # Filter by since_date if set
+        if since_date:
+            cutoff_str = since_date.isoformat() + "Z"
+            all_repos = [r for r in all_repos if (r.get("pushed_at") or "") >= cutoff_str]
+
         result["total_repos"] = len(all_repos)
         result["total_stars"] = sum(r.get("stargazers_count", 0) for r in all_repos)
 
@@ -162,3 +172,45 @@ def search_company_github(company_name: str, ticker: str) -> dict:
         logger.warning("GitHub repo listing failed for %s: %s", ticker, e)
 
     return result
+
+
+def github_dict_to_collected_item(data: dict) -> CollectedItem:
+    """Convert a github signals dict to a CollectedItem with narrative summary."""
+    org_name = data.get("org_name") or data.get("ticker", "unknown")
+    ticker = data.get("ticker", "")
+    ai_repos = data.get("ai_ml_repos", 0)
+    total_stars = data.get("ai_ml_stars", 0) or data.get("total_stars", 0)
+    recent = data.get("recent_commits_30d", 0)
+    top_repos = data.get("top_ai_repos", [])
+
+    top_repo_strs = ", ".join(
+        f"{r['name']} ({r.get('stars', 0)} stars)" for r in top_repos[:5]
+    ) if top_repos else "none"
+
+    narrative = (
+        f"{org_name} operates {ai_repos} AI/ML repositories "
+        f"({total_stars} total stars) with {recent} active in the last 30 days. "
+        f"Top AI repos: {top_repo_strs}."
+    )
+
+    today = date.today()
+    return CollectedItem(
+        item_id=f"{org_name}_{today.isoformat()}",
+        title=f"GitHub AI/ML Activity for {org_name}",
+        content=narrative,
+        author=org_name,
+        author_role="engineering organization",
+        author_affiliation=data.get("company_name") or ticker,
+        publisher="GitHub",
+        url=data.get("org_url"),
+        source_date=today,
+        access_date=today,
+        authority=SourceAuthority.FIRST_PARTY_CODE,
+        metadata={
+            "ai_repos": ai_repos,
+            "total_repos": data.get("total_repos", 0),
+            "total_stars": total_stars,
+            "recent_commits_30d": recent,
+            "top_ai_repos": top_repos,
+        },
+    )

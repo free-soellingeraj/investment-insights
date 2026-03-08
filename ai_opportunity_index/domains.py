@@ -46,9 +46,164 @@ class PipelineSubtask(str, Enum):
     ALL = "all"
 
 
+class TargetDimension(str, Enum):
+    """Cost, revenue, or general AI investment dimension."""
+    COST = "cost"
+    REVENUE = "revenue"
+    GENERAL = "general"
+
+
+class CaptureStage(str, Enum):
+    """Maturity stage of AI evidence."""
+    PLANNED = "planned"
+    INVESTED = "invested"
+    REALIZED = "realized"
+
+
+class EvidenceSourceType(str, Enum):
+    """Type of evidence source."""
+    FILING_NLP = "filing_nlp"
+    PATENT = "patent"
+    PRODUCT = "product"
+    JOB = "job"
+    REVENUE_OPPORTUNITY = "revenue_opportunity"
+    COST_OPPORTUNITY = "cost_opportunity"
+    SUBSIDIARY_DISCOVERY = "subsidiary_discovery"
+    WEB_ENRICHMENT = "web_enrichment"
+    GITHUB = "github"
+    ANALYST = "analyst"
+
+
+class SourceType(str, Enum):
+    """Type of data source for unified collection/extraction."""
+    NEWS = "news"
+    FILING = "filing"
+    GITHUB = "github"
+    ANALYST = "analyst"
+    WEB_CAREERS = "web_careers"
+    WEB_IR = "web_ir"
+    WEB_BLOG = "web_blog"
+
+
+class SourceAuthority(str, Enum):
+    """How the author knows what they claim — basis of knowledge.
+
+    Determines base credibility weighting in scoring.
+    """
+    FIRST_PARTY_DISCLOSURE = "first_party_disclosure"  # company's own legal filing (10-K, proxy)
+    FIRST_PARTY_PUBLIC = "first_party_public"           # company's own website, blog, press release
+    FIRST_PARTY_CODE = "first_party_code"               # company's own code repositories
+    PROFESSIONAL_ANALYSIS = "professional_analysis"     # sell-side/buy-side analyst, rating agency
+    THIRD_PARTY_JOURNALISM = "third_party_journalism"   # news article, investigative report
+    AGGREGATED_CONSENSUS = "aggregated_consensus"       # consensus estimates, aggregated ratings
+
+
+class ValuationEvidenceType(str, Enum):
+    """Evidence type used in valuations and evidence groups."""
+    PLAN = "plan"
+    INVESTMENT = "investment"
+    CAPTURE = "capture"
+
+
+class SignalStrength(str, Enum):
+    """Strength of an evidence signal."""
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class HorizonShape(str, Enum):
+    """Shape of the value realization horizon curve."""
+    FLAT = "flat"
+    LINEAR_RAMP = "linear_ramp"
+    S_CURVE = "s_curve"
+    BACK_LOADED = "back_loaded"
+
+
+class RunStatus(str, Enum):
+    """Status of a pipeline run."""
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class RefreshStatus(str, Enum):
+    """Status of a refresh request."""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class NotificationStatus(str, Enum):
+    """Status of a notification."""
+    PENDING = "pending"
+    SENT = "sent"
+
+
+class NotificationChannel(str, Enum):
+    """Delivery channel for notifications."""
+    EMAIL = "email"
+
+
+class SubscriberStatus(str, Enum):
+    """Status of a subscriber account."""
+    ACTIVE = "active"
+    CANCELED = "canceled"
+    PAST_DUE = "past_due"
+
+
+class PlanTier(str, Enum):
+    """Subscription plan tier."""
+    STANDARD = "standard"
+
+
+class RelationshipType(str, Enum):
+    """Type of corporate relationship."""
+    SUBSIDIARY = "subsidiary"
+    JOINT_VENTURE = "joint_venture"
+    STRATEGIC_INVESTMENT = "strategic_investment"
+
+
+class Quadrant(str, Enum):
+    """AI opportunity/realization quadrant."""
+    HIGH_OPP_HIGH_REAL = "high_opp_high_real"
+    HIGH_OPP_LOW_REAL = "high_opp_low_real"
+    LOW_OPP_HIGH_REAL = "low_opp_high_real"
+    LOW_OPP_LOW_REAL = "low_opp_low_real"
+
+
+class ValuationStage(str, Enum):
+    """Stage of a valuation (preliminary vs final)."""
+    PRELIMINARY = "preliminary"
+    FINAL = "final"
+
+
+class FinancialMetric(str, Enum):
+    """Type of financial observation metric."""
+    MARKET_CAP = "market_cap"
+    REVENUE = "revenue"
+    NET_INCOME = "net_income"
+    EMPLOYEES = "employees"
+
+
+class FinancialUnits(str, Enum):
+    """Units for financial observation values."""
+    USD = "usd"
+    COUNT = "count"
+
+
+class RunType(str, Enum):
+    """Type of pipeline run."""
+    FULL = "full"
+    PARTIAL = "partial"
+    REFRESH_REQUEST = "refresh_request"
+
+
 class Company(BaseModel):
     id: int | None = None
-    ticker: str
+    ticker: str | None = None
+    slug: str | None = None
     exchange: str | None = None
     company_name: str | None = None
     cik: int | None = None
@@ -58,16 +213,68 @@ class Company(BaseModel):
     sector: str | None = None
     industry: str | None = None
     is_active: bool = True
+    child_ticker_refs: list[int] | None = None
+    canonical_company_id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class CompanyLinks(BaseModel):
+    """Discovered URLs for a company."""
+    github_url: str | None = None
+    careers_url: str | None = None
+    ir_url: str | None = None
+    blog_url: str | None = None
+
+
+class CompanyUpdate(BaseModel):
+    """Payload for updating a company record. Only provided fields are applied."""
+    company_name: str | None = None
+    ticker: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    github_url: str | None = None
+    careers_url: str | None = None
+    ir_url: str | None = None
+    blog_url: str | None = None
+
+
+class CompanyRecord(BaseModel):
+    """Full company record returned after reads/updates."""
+    id: int
+    ticker: str | None = None
+    slug: str | None = None
+    company_name: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    github_url: str | None = None
+    careers_url: str | None = None
+    ir_url: str | None = None
+    blog_url: str | None = None
+    is_active: bool = True
+    child_ticker_refs: list[int] | None = None
+    canonical_company_id: int | None = None
+    updated_at: datetime | None = None
+
+
+class CompanyVenture(BaseModel):
+    """Ownership relationship between a parent and subsidiary company."""
+    id: int | None = None
+    parent_id: int
+    subsidiary_id: int
+    ownership_pct: float | None = None
+    relationship_type: RelationshipType = RelationshipType.SUBSIDIARY
+    notes: str | None = None
 
 
 class FinancialObservation(BaseModel):
     id: int | None = None
     company_id: int
-    metric: str  # 'market_cap', 'revenue', 'net_income', 'employees'
+    metric: FinancialMetric
     value: float
-    value_units: str  # 'usd', 'millions_usd', 'billions_usd', 'count', etc.
+    value_units: FinancialUnits
     source_datetime: datetime
     source_link: str | None = None
     source_name: str | None = None  # 'yahoo_finance', 'sec_10k', 'sec_10q'
@@ -79,16 +286,16 @@ class AIOpportunityEvidence(BaseModel):
     id: int | None = None
     company_id: int
     pipeline_run_id: int | None = None
-    evidence_type: str  # 'filing_nlp', 'patent', 'product', 'job', 'revenue_opportunity', 'cost_opportunity'
-    evidence_subtype: str | None = None  # 'keyword_match', 'ai_patent', 'product_launch', etc.
-    source_name: str | None = None  # 'SEC EDGAR', 'USPTO', 'GNews', 'Adzuna', 'BLS'
+    evidence_type: EvidenceSourceType
+    evidence_subtype: str | None = None
+    source_name: str | None = None
     source_url: str | None = None
     source_date: date | None = None
     score_contribution: float | None = None
     weight: float | None = None
-    signal_strength: str | None = None  # 'high', 'medium', 'low'
-    target_dimension: str | None = None  # 'cost', 'revenue', 'general'
-    capture_stage: str | None = None  # 'planned', 'invested', 'realized'
+    signal_strength: SignalStrength | None = None
+    target_dimension: TargetDimension | None = None
+    capture_stage: CaptureStage | None = None
     source_excerpt: str | None = None  # verbatim excerpt from source supporting this evidence
     dollar_estimate_usd: float | None = None
     dollar_year_1: float | None = None
@@ -123,10 +330,14 @@ class CompanyScore(BaseModel):
     cost_capture_usd: float | None = None
     revenue_capture_usd: float | None = None
     total_investment_usd: float | None = None
+    ai_index_usd: float | None = None
+    capture_probability: float | None = None
+    opportunity_usd: float | None = None
+    evidence_dollars: float | None = None
     opportunity: float
     realization: float
-    quadrant: str | None = None
-    quadrant_label: str | None = None
+    quadrant: Quadrant | None = None
+    quadrant_label: str | None = None  # human-readable label derived from quadrant
     combined_rank: int | None = None
     flags: list[str] = Field(default_factory=list)
     data_as_of: datetime
@@ -138,8 +349,8 @@ class PipelineRun(BaseModel):
     run_id: str  # UUID
     task: PipelineTask
     subtask: PipelineSubtask
-    run_type: str  # 'full', 'partial', 'refresh_request'
-    status: str = "running"  # 'running', 'completed', 'failed'
+    run_type: RunType
+    status: RunStatus = RunStatus.RUNNING
     parameters: dict = Field(default_factory=dict)
     tickers_requested: list[str] = Field(default_factory=list)
     tickers_succeeded: int = 0
@@ -155,7 +366,7 @@ class RefreshRequest(BaseModel):
     subscriber_id: int
     company_id: int
     dimensions: list[str] = Field(default_factory=lambda: ["opportunity", "realization"])
-    status: str = "pending"  # 'pending', 'processing', 'completed', 'failed'
+    status: RefreshStatus = RefreshStatus.PENDING
     pipeline_run_id: int | None = None
     requested_at: datetime | None = None
     completed_at: datetime | None = None
@@ -164,12 +375,12 @@ class RefreshRequest(BaseModel):
 class Notification(BaseModel):
     id: int | None = None
     subscriber_id: int
-    notification_type: str  # 'refresh_complete', 'score_change'
-    channel: str = "email"
+    notification_type: str  # open-ended: 'refresh_complete', 'score_change', etc.
+    channel: NotificationChannel = NotificationChannel.EMAIL
     subject: str | None = None
     body: str | None = None
     payload: dict = Field(default_factory=dict)
-    status: str = "pending"
+    status: NotificationStatus = NotificationStatus.PENDING
     created_at: datetime | None = None
 
 
@@ -178,8 +389,8 @@ class Subscriber(BaseModel):
     email: str
     stripe_customer_id: str | None = None
     stripe_subscription_id: str | None = None
-    status: str = "active"
-    plan_tier: str = "standard"
+    status: SubscriberStatus = SubscriberStatus.ACTIVE
+    plan_tier: PlanTier = PlanTier.STANDARD
     access_token: str
     created_at: datetime | None = None
 
@@ -190,8 +401,8 @@ class ScoreChange(BaseModel):
     dimension: str
     old_score: float | None = None
     new_score: float | None = None
-    old_quadrant: str | None = None
-    new_quadrant: str | None = None
+    old_quadrant: Quadrant | None = None
+    new_quadrant: Quadrant | None = None
     changed_at: datetime | None = None
 
 
@@ -209,10 +420,16 @@ class EvidenceGroupPassage(BaseModel):
     source_date: date | None = None
     confidence: float | None = None
     reasoning: str | None = None
-    target_dimension: str | None = None
-    capture_stage: str | None = None
+    target_dimension: TargetDimension | None = None
+    capture_stage: CaptureStage | None = None
     source_url: str | None = None
     source_author: str | None = None
+    # — Provenance fields (for citation and credibility) —
+    source_author_role: str | None = None
+    source_author_affiliation: str | None = None
+    source_publisher: str | None = None
+    source_access_date: date | None = None
+    source_authority: SourceAuthority | None = None
 
 
 class EvidenceGroup(BaseModel):
@@ -220,8 +437,8 @@ class EvidenceGroup(BaseModel):
     id: int | None = None
     company_id: int
     pipeline_run_id: int | None = None
-    target_dimension: str  # cost, revenue, general
-    evidence_type: str | None = None  # plan, investment, capture (set after valuation)
+    target_dimension: TargetDimension
+    evidence_type: ValuationEvidenceType | None = None
     passage_count: int = 0
     source_types: list[str] = Field(default_factory=list)
     date_earliest: date | None = None
@@ -238,7 +455,7 @@ class PlanDetails(BaseModel):
     probability: float = 0.5
     strategic_rationale: str = ""
     contingencies: str = ""
-    horizon_shape: str = "s_curve"
+    horizon_shape: HorizonShape = HorizonShape.S_CURVE
     year_1_pct: float = 0.15
     year_2_pct: float = 0.60
     year_3_pct: float = 1.0
@@ -251,7 +468,7 @@ class InvestmentDetails(BaseModel):
     completion_pct: float = 0.5
     technology_area: str = ""
     vendor_partner: str = ""
-    horizon_shape: str = "linear_ramp"
+    horizon_shape: HorizonShape = HorizonShape.LINEAR_RAMP
     year_1_pct: float = 0.33
     year_2_pct: float = 0.66
     year_3_pct: float = 1.0
@@ -265,7 +482,7 @@ class CaptureDetails(BaseModel):
     metric_delta: str = ""
     measurement_period: str = ""
     measured_dollar_impact: float | None = None
-    horizon_shape: str = "flat"
+    horizon_shape: HorizonShape = HorizonShape.FLAT
     year_1_pct: float = 1.0
     year_2_pct: float = 1.0
     year_3_pct: float = 1.0
@@ -276,9 +493,9 @@ class Valuation(BaseModel):
     id: int | None = None
     group_id: int
     pipeline_run_id: int | None = None
-    stage: str  # "preliminary" or "final"
+    stage: ValuationStage
     preliminary_id: int | None = None  # final → preliminary link
-    evidence_type: str  # plan, investment, capture
+    evidence_type: ValuationEvidenceType
     narrative: str
     confidence: float
     dollar_low: float | None = None
@@ -314,3 +531,84 @@ class ValuationDiscrepancy(BaseModel):
     resolution_method: str | None = None
     source_search_result: str | None = None
     trusted_group_id: int | None = None
+
+
+# ── Unified Source & Evidence Models ────────────────────────────────────────
+
+
+class CollectedItem(BaseModel):
+    """A single raw collected item from any source.
+
+    Captures the full provenance chain: WHO said it, WHAT they claimed,
+    WHEN it was published, WHERE it appeared, WHY they have authority,
+    and HOW we obtained it. Enough metadata to reconstruct a proper
+    MLA citation and assess credibility even if the original URL goes dead.
+    """
+    item_id: str              # dedup key (URL, accession number, org+date hash)
+
+    # — WHAT was said —
+    title: str | None = None  # article title, filing type, repo name, etc.
+    content: str | None = None  # raw text for extraction (article body, page text)
+
+    # — WHO said it —
+    author: str | None = None           # person or entity who authored it
+    author_role: str | None = None      # role/title establishing authority
+    author_affiliation: str | None = None  # organization the author belongs to
+
+    # — WHERE it appeared (publication venue) —
+    publisher: str | None = None        # publication/outlet/platform
+    url: str | None = None              # direct link to the content
+
+    # — WHEN —
+    source_date: date | None = None     # publication/creation date (the as-of date)
+    access_date: date | None = None     # date we retrieved/scraped this content
+
+    # — WHY they have authority (credibility basis) —
+    authority: SourceAuthority | None = None
+
+    # — Extra source-specific fields —
+    metadata: dict = Field(default_factory=dict)  # raw API response fields
+
+
+class CollectionManifest(BaseModel):
+    """Tracks metadata about a collection run (not the items themselves).
+
+    Written to sources/{TICKER}/{source_type}/{YYYY}/{MM}/_manifest.json.
+    Used by daily refresh to determine since_date for next incremental fetch.
+    """
+    ticker: str
+    company_name: str | None = None
+    source_type: SourceType
+    collected_at: datetime
+    since_date: datetime | None = None  # date range start for this run
+    items_found: int = 0                # how many new items were written
+    item_ids: list[str] = Field(default_factory=list)  # item_ids collected
+
+
+class ExtractedPassage(BaseModel):
+    """A single extracted evidence passage (shared by all sources)."""
+    passage_text: str
+    target_dimension: TargetDimension | str
+    capture_stage: CaptureStage | str
+    confidence: float
+    reasoning: str
+
+
+class ExtractedItem(BaseModel):
+    """Extraction results for a single source item.
+
+    Carries forward full provenance from CollectedItem so downstream
+    consumers (munger, valuation, web UI) can cite sources and assess credibility.
+    """
+    item_id: str              # matches CollectedItem.item_id
+    title: str | None = None
+    url: str | None = None
+    # — Provenance (copied from CollectedItem) —
+    author: str | None = None
+    author_role: str | None = None
+    author_affiliation: str | None = None
+    publisher: str | None = None
+    source_date: date | None = None
+    access_date: date | None = None
+    authority: SourceAuthority | None = None
+    passages: list[ExtractedPassage] = Field(default_factory=list)

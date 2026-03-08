@@ -24,6 +24,9 @@
         th.sortable:hover { color: #a5b4fc; }
         th.sortable .arrow { font-size: 10px; margin-left: 2px; opacity: 0.4; }
         th.sortable.active .arrow { opacity: 1; color: #818cf8; }
+        details[open] .details-arrow { transform: rotate(90deg); }
+        details summary::-webkit-details-marker { display: none; }
+        details summary { list-style: none; }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 antialiased">
@@ -60,21 +63,26 @@
             </div>
         </section>
 
-        <!-- Dual Scatter Plots: Cost & Revenue (0-1 Scores) -->
-        <section class="mb-12">
-            <h2 class="text-2xl font-bold mb-2">Cost & Revenue: Opportunity vs Capture (Scores)</h2>
-            <p class="text-gray-400 text-sm mb-4">Each dot is a company. Left: cost dimension. Right: revenue dimension. Companies above the diagonal are capturing more than their structural opportunity. Click any dot to open company profile.</p>
-            <div class="grid md:grid-cols-2 gap-6">
-                <div id="scatter-cost" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:450px;"></div>
-                <div id="scatter-revenue" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:450px;"></div>
-            </div>
-        </section>
-
         <!-- Legacy Scatter Plot -->
         <section class="mb-12">
             <h2 class="text-2xl font-bold mb-2">Opportunity vs Realization (Combined)</h2>
             <p class="text-gray-400 text-sm mb-4">Combined 2D view. Click any dot to open company profile.</p>
             <div id="scatter-chart" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:500px;"></div>
+        </section>
+
+        <!-- Dual Scatter Plots: Cost & Revenue (0-1 Scores) — collapsed by default -->
+        <section class="mb-12">
+            <details>
+                <summary class="cursor-pointer select-none flex items-center gap-2 mb-4">
+                    <h2 class="text-2xl font-bold">Cost & Revenue: Opportunity vs Capture (Scores)</h2>
+                    <svg class="w-5 h-5 text-gray-400 transition-transform details-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </summary>
+                <p class="text-gray-400 text-sm mb-4">Each dot is a company. Left: cost dimension. Right: revenue dimension. Companies above the diagonal are capturing more than their structural opportunity. Click any dot to open company profile.</p>
+                <div class="grid md:grid-cols-2 gap-6">
+                    <div id="scatter-cost" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:450px;"></div>
+                    <div id="scatter-revenue" class="bg-gray-900 border border-gray-800 rounded-2xl p-4" style="height:450px;"></div>
+                </div>
+            </details>
         </section>
 
         <!-- Company Table -->
@@ -209,7 +217,6 @@
                 });
             }
             renderCompanyTable();
-            renderDualScatter();
             renderScatterPlot();
             populateFilters();
         } catch (e) {
@@ -372,6 +379,15 @@
         const currentInd = indSel.value;
         indSel.innerHTML = '<option value="">All Industries</option>' + industries.map(i => `<option value="${i}" ${i === currentInd ? 'selected' : ''}>${i}</option>`).join('');
     }
+
+    // Render dual scatter lazily when the details element is opened
+    let dualScatterRendered = false;
+    document.querySelector('details')?.addEventListener('toggle', function() {
+        if (this.open && !dualScatterRendered && allCompanies.length > 0) {
+            dualScatterRendered = true;
+            renderDualScatter();
+        }
+    });
 
     // Initialize
     loadCompanies();

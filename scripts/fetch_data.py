@@ -17,7 +17,7 @@ from datetime import datetime
 from ai_opportunity_index.data.company_universe import load_universe
 from ai_opportunity_index.data.financial_data import fetch_bulk_financials
 from ai_opportunity_index.data.sec_edgar import fetch_and_cache_filings
-from ai_opportunity_index.domains import FinancialObservation
+from ai_opportunity_index.domains import FinancialMetric, FinancialObservation, FinancialUnits
 from ai_opportunity_index.storage.db import (
     get_company_by_ticker,
     get_session,
@@ -75,10 +75,10 @@ def main():
                 continue
 
             metrics = {
-                "market_cap": ("usd", data.get("market_cap")),
-                "revenue": ("usd", data.get("revenue")),
-                "net_income": ("usd", data.get("net_income")),
-                "employees": ("count", data.get("employees")),
+                FinancialMetric.MARKET_CAP: (FinancialUnits.USD, data.get("market_cap")),
+                FinancialMetric.REVENUE: (FinancialUnits.USD, data.get("revenue")),
+                FinancialMetric.NET_INCOME: (FinancialUnits.USD, data.get("net_income")),
+                FinancialMetric.EMPLOYEES: (FinancialUnits.COUNT, data.get("employees")),
             }
             obs_items = []
             for metric, (units, value) in metrics.items():
