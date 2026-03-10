@@ -9,7 +9,6 @@ Cloud Run Job that:
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -28,13 +27,10 @@ from ai_opportunity_index.storage.db import (
     update_refresh_request_status,
 )
 from ai_opportunity_index.storage.models import CompanyModel, SubscriberModel
+from web.config import BASE_URL, FROM_EMAIL, RESEND_API_KEY
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
-
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "hello@winonaquantitative.com")
-BASE_URL = os.environ.get("BASE_URL", "http://localhost:8080")
 
 
 def send_notification_email(email: str, ticker: str, dashboard_url: str):

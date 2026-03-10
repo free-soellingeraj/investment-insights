@@ -46,14 +46,9 @@ class LLMDollarEstimator(DollarEstimator):
     """Estimate dollar impact using LLM analysis."""
 
     def __init__(self) -> None:
-        from pydantic_ai import Agent
-        from pydantic_ai.models.google import GoogleModel
+        from ai_opportunity_index.llm_backend import get_agent
 
-        from ai_opportunity_index.config import get_google_provider
-
-        model = GoogleModel(LLM_ESTIMATION_MODEL, provider=get_google_provider())
-        self.agent = Agent(
-            model,
+        self.agent = get_agent(
             output_type=DollarEstimate,
             system_prompt=(
                 "You are a financial analyst who estimates the annual dollar impact "
@@ -61,6 +56,7 @@ class LLMDollarEstimator(DollarEstimator):
                 "Base your estimates on company size, industry benchmarks, and the "
                 "specificity of the evidence provided."
             ),
+            model_name=LLM_ESTIMATION_MODEL,
         )
 
     async def _estimate_async(

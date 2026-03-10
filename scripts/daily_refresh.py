@@ -85,7 +85,7 @@ async def daily_refresh(
     fallback_days: int = 2,
     dry_run: bool = False,
     max_concurrency: int = 20,
-    llm_concurrency: int = 50,
+    llm_concurrency: int = 8,
 ):
     """Run the two-phase daily refresh."""
     init_db()
@@ -231,8 +231,8 @@ def main():
         help="Max concurrent companies in Phase 2 (default: 20)",
     )
     parser.add_argument(
-        "--llm-concurrency", type=int, default=50,
-        help="Max concurrent LLM API calls (default: 50)",
+        "--llm-concurrency", type=int, default=8,
+        help="Max concurrent LLM API calls (default: 8)",
     )
     args = parser.parse_args()
 

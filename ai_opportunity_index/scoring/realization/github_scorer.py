@@ -54,6 +54,7 @@ def score_github_classified(
     recent_activity = data.get("recent_commits_30d", 0)
     top_ai_repos = data.get("top_ai_repos", [])
     org_name = data.get("org_name")
+    org_url = data.get("org_url")
 
     if not org_name or ai_repos == 0:
         return None
@@ -70,7 +71,7 @@ def score_github_classified(
             stage=CaptureStage.INVESTED,
             raw_score=repo_score,
             description=f"{ai_repos} AI/ML repos on GitHub ({org_name})",
-            metadata={"ai_repos": ai_repos, "total_repos": total_repos},
+            metadata={"ai_repos": ai_repos, "total_repos": total_repos, "url": org_url},
         ))
 
     # Stars → realized/community validation → revenue signal
@@ -84,7 +85,7 @@ def score_github_classified(
             stage=stage,
             raw_score=star_score,
             description=f"{ai_stars} stars across AI/ML repos",
-            metadata={"ai_stars": ai_stars},
+            metadata={"ai_stars": ai_stars, "url": org_url},
         ))
 
     # Recent activity → ongoing investment (cost dimension — active development)
@@ -96,7 +97,7 @@ def score_github_classified(
             stage=CaptureStage.INVESTED,
             raw_score=activity_score,
             description=f"{recent_activity} recently active AI repos (30d)",
-            metadata={"recent_commits_30d": recent_activity},
+            metadata={"recent_commits_30d": recent_activity, "url": org_url},
         ))
 
     # Top repos → specific evidence items
@@ -112,7 +113,7 @@ def score_github_classified(
                 raw_score=min(repo_stars / 2000.0, 1.0),
                 description=f"{repo_name}: {repo_desc[:100]}" if repo_desc else repo_name,
                 source_excerpt=f"{repo_stars} stars, lang: {repo.get('language', 'N/A')}",
-                metadata={"repo_name": repo_name, "stars": repo_stars},
+                metadata={"repo_name": repo_name, "stars": repo_stars, "url": org_url},
             ))
 
     if not evidence_items:

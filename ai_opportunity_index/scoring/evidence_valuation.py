@@ -10,19 +10,24 @@ Uses pydantic_ai agents with structured output.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 from datetime import date, datetime
 
 from pydantic import BaseModel
 
-from ai_opportunity_index.config import LLM_EXTRACTION_MODEL, get_google_provider
+from ai_opportunity_index.config import LLM_EXTRACTION_MODEL
+from ai_opportunity_index.scoring.calibration import (
+    calibrate_confidence,
+    check_dollar_sanity,
+    source_authority_weight,
+)
 from ai_opportunity_index.domains import (
     CaptureDetails,
     EvidenceGroup,
     InvestmentDetails,
     PlanDetails,
+    TargetDimension,
     Valuation,
     ValuationDiscrepancy,
     ValuationEvidenceType,
@@ -213,58 +218,25 @@ def compute_factor_score(
     magnitude: float,
     stage_weight: float,
     recency: float,
+    authority_weight: float = 1.0,
 ) -> float:
-    """Factor score = specificity * magnitude * stage_weight * recency."""
-    return specificity * magnitude * stage_weight * recency
+    """Factor score = specificity * magnitude * stage_weight * recency * authority_weight."""
+    return specificity * magnitude * stage_weight * recency * authority_weight
 
 
 # ── Retry config ──────────────────────────────────────────────────────────
 
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-    before_sleep_log,
-)
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    """Return True for rate-limit and transient server errors."""
-    s = str(exc)
-    return "429" in s or "RESOURCE_EXHAUSTED" in s or "503" in s or "500" in s
-
-
-_llm_retry = retry(
-    retry=retry_if_exception(_is_retryable),
-    stop=stop_after_attempt(4),
-    wait=wait_exponential(multiplier=5, min=5, max=60),
-    before_sleep=before_sleep_log(logger, logging.INFO),
-    reraise=True,
-)
-
-
-async def _run_with_retry(agent, prompt):
-    """Run an agent with tenacity exponential backoff on 429/5xx errors."""
-
-    @_llm_retry
-    async def _call():
-        return await agent.run(prompt)
-
-    return await _call()
+from ai_opportunity_index.llm_backend import run_agent_with_retry as _run_with_retry  # noqa: E402
 
 
 # ── LLM Agent initialization ─────────────────────────────────────────────
 
 
 def _get_agent(output_type):
-    """Lazily create a pydantic_ai Agent for valuation."""
-    from pydantic_ai import Agent
-    from pydantic_ai.models.google import GoogleModel
+    """Lazily create an LLM Agent for valuation."""
+    from ai_opportunity_index.llm_backend import get_agent
 
-    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-    return Agent(
-        model,
+    return get_agent(
         output_type=output_type,
         system_prompt=(
             "You are a senior AI investment analyst. You evaluate corporate AI evidence "
@@ -284,8 +256,11 @@ async def _preliminary_value_group(
     sector: str,
     revenue: float,
     semaphore: asyncio.Semaphore | None = None,
-) -> PreliminaryOutput:
-    """Run preliminary LLM valuation for a single evidence group."""
+) -> tuple[PreliminaryOutput, int, int]:
+    """Run preliminary LLM valuation for a single evidence group.
+
+    Returns (output, input_tokens, output_tokens).
+    """
     revenue_str = f"${revenue:,.0f}" if revenue else "Unknown"
 
     passages_data = [
@@ -319,7 +294,8 @@ async def _preliminary_value_group(
     else:
         result = await _run_with_retry(agent, prompt)
 
-    return result.output
+    usage = result.usage()
+    return result.output, usage.input_tokens or 0, usage.output_tokens or 0
 
 
 async def run_preliminary_valuations(
@@ -362,8 +338,13 @@ async def run_preliminary_valuations(
             )
             continue
 
-        output: PreliminaryOutput = result
+        output, in_tokens, out_tokens = result
         ev_type = _normalize_evidence_type(output.evidence_type)
+
+        # Calibrate LLM confidence
+        raw_confidence = output.confidence
+        calibrated_confidence = calibrate_confidence(raw_confidence, "llm")
+        logger.debug("[%s] Calibrated confidence: %.2f -> %.2f", ticker, raw_confidence, calibrated_confidence)
 
         # Parse type-specific details
         plan_detail = None
@@ -380,20 +361,29 @@ async def run_preliminary_valuations(
         # Update group with classified evidence_type
         group.evidence_type = ev_type
 
+        # Ensure low <= high numerically (LLMs sometimes reverse for negatives)
+        prelim_dollar_low = output.dollar_low
+        prelim_dollar_high = output.dollar_high
+        if prelim_dollar_low is not None and prelim_dollar_high is not None and prelim_dollar_low > prelim_dollar_high:
+            prelim_dollar_low, prelim_dollar_high = prelim_dollar_high, prelim_dollar_low
+
         val = Valuation(
             group_id=group.id,
             pipeline_run_id=pipeline_run_id,
             stage=ValuationStage.PRELIMINARY,
             evidence_type=ev_type,
             narrative=output.narrative,
-            confidence=output.confidence,
-            dollar_low=output.dollar_low,
-            dollar_high=output.dollar_high,
+            confidence=calibrated_confidence,
+            dollar_low=prelim_dollar_low,
+            dollar_high=prelim_dollar_high,
             dollar_rationale=output.dollar_rationale,
             specificity=output.specificity,
             plan_detail=plan_detail,
             investment_detail=investment_detail,
             capture_detail=capture_detail,
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
+            model_name=LLM_EXTRACTION_MODEL,
         )
 
         save_valuation(val, session=session)
@@ -420,7 +410,7 @@ async def _final_value_group(
     sector: str,
     revenue: float,
     semaphore: asyncio.Semaphore | None = None,
-) -> FinalOutput:
+) -> tuple[FinalOutput, int, int]:
     """Run final regressive LLM valuation for a single group."""
     revenue_str = f"${revenue:,.0f}" if revenue else "Unknown"
 
@@ -472,7 +462,8 @@ async def _final_value_group(
     else:
         result = await _run_with_retry(agent, prompt)
 
-    return result.output
+    usage = result.usage()
+    return result.output, usage.input_tokens or 0, usage.output_tokens or 0
 
 
 async def run_final_valuations(
@@ -505,7 +496,7 @@ async def run_final_valuations(
             continue
 
         try:
-            output = await _final_value_group(
+            output, in_tokens, out_tokens = await _final_value_group(
                 group, preliminary, final_valuations, final_groups,
                 company_name, ticker, sector, revenue,
                 semaphore=semaphore,
@@ -516,6 +507,11 @@ async def run_final_valuations(
 
         # Normalize LLM output
         ev_type = _normalize_evidence_type(output.evidence_type)
+
+        # Calibrate LLM confidence
+        raw_confidence = output.confidence
+        calibrated_confidence = calibrate_confidence(raw_confidence, "llm")
+        logger.debug("[%s] Calibrated confidence: %.2f -> %.2f", ticker, raw_confidence, calibrated_confidence)
 
         # Parse type-specific details
         plan_detail = None
@@ -530,15 +526,35 @@ async def run_final_valuations(
             capture_detail = CaptureDetails(**_normalize_horizon_shape(_coerce_capture_detail(output.capture_detail)))
 
         # Compute factor score components
+        dollar_low = output.dollar_low
+        dollar_high = output.dollar_high
         dollar_mid = None
-        if output.dollar_low is not None and output.dollar_high is not None:
-            dollar_mid = (output.dollar_low + output.dollar_high) / 2.0
+        if dollar_low is not None and dollar_high is not None:
+            # Ensure low <= high numerically (LLMs sometimes reverse for negatives)
+            if dollar_low > dollar_high:
+                dollar_low, dollar_high = dollar_high, dollar_low
+            dollar_mid = (dollar_low + dollar_high) / 2.0
+
+        # Dollar sanity check
+        if dollar_mid is not None and dollar_mid > 0:
+            sanity_dollar_mid, sanity_warnings = check_dollar_sanity(dollar_mid, revenue, None)
+            for warning in sanity_warnings:
+                logger.warning("[%s] Dollar sanity (group=%d): %s", ticker, group.id, warning)
+            dollar_mid = sanity_dollar_mid
+
+        # Compute authority weight from the evidence group's source types
+        authority_weights = []
+        for passage in group.passages:
+            src_type = passage.source_type or "unknown"
+            src_authority = passage.source_authority.value if passage.source_authority else None
+            authority_weights.append(source_authority_weight(src_type, src_authority))
+        auth_weight = max(authority_weights) if authority_weights else 1.0
 
         specificity = max(0.0, min(1.0, output.specificity))
         magnitude = compute_magnitude(dollar_mid, revenue)
         stage_weight = STAGE_WEIGHTS.get(ev_type, 0.5)
         recency = compute_recency(group.date_latest)
-        factor_score = compute_factor_score(specificity, magnitude, stage_weight, recency)
+        factor_score = compute_factor_score(specificity, magnitude, stage_weight, recency, auth_weight)
 
         val = Valuation(
             group_id=group.id,
@@ -547,9 +563,9 @@ async def run_final_valuations(
             preliminary_id=preliminary.id,
             evidence_type=ev_type,
             narrative=output.narrative,
-            confidence=output.confidence,
-            dollar_low=output.dollar_low,
-            dollar_high=output.dollar_high,
+            confidence=calibrated_confidence,
+            dollar_low=dollar_low,
+            dollar_high=dollar_high,
             dollar_mid=dollar_mid,
             dollar_rationale=output.dollar_rationale,
             specificity=specificity,
@@ -563,6 +579,9 @@ async def run_final_valuations(
             plan_detail=plan_detail,
             investment_detail=investment_detail,
             capture_detail=capture_detail,
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
+            model_name=LLM_EXTRACTION_MODEL,
         )
 
         save_valuation(val, session=session)
@@ -615,7 +634,6 @@ def aggregate_valuations(
     """
     group_by_id = {g.id: g for g in groups}
 
-    from ai_opportunity_index.domains import TargetDimension
     # Per-dimension aggregation
     dim_scores: dict[str, float] = {TargetDimension.COST: 0.0, TargetDimension.REVENUE: 0.0, TargetDimension.GENERAL: 0.0}
     potential_dollars: dict[str, float] = {TargetDimension.COST: 0.0, TargetDimension.REVENUE: 0.0, TargetDimension.GENERAL: 0.0}
@@ -645,7 +663,17 @@ def aggregate_valuations(
         raw = dim_scores[dim]
         dim_scores[dim] = min(1.0, 1.0 - math.exp(-raw)) if raw > 0 else 0.0
 
-    return {
+    # Collect the IDs of evidence groups and valuations that contributed
+    evidence_group_ids = sorted({
+        val.group_id for val in final_valuations
+        if val.group_id is not None and val.group_id in group_by_id
+    })
+    valuation_ids = sorted({
+        val.id for val in final_valuations
+        if val.id is not None
+    })
+
+    result = {
         "cost_score": round(dim_scores[TargetDimension.COST], 4),
         "revenue_score": round(dim_scores[TargetDimension.REVENUE], 4),
         "general_score": round(dim_scores[TargetDimension.GENERAL], 4),
@@ -661,7 +689,46 @@ def aggregate_valuations(
             "investment": sum(1 for v in final_valuations if v.evidence_type == ValuationEvidenceType.INVESTMENT),
             "capture": sum(1 for v in final_valuations if v.evidence_type == ValuationEvidenceType.CAPTURE),
         },
+        "evidence_group_ids": evidence_group_ids,
+        "valuation_ids": valuation_ids,
     }
+
+    # Apply cross-source verification adjustment if multiple source types present
+    all_source_types: set[str] = set()
+    for val in final_valuations:
+        group = group_by_id.get(val.group_id)
+        if group:
+            all_source_types.update(group.source_types)
+
+    if len(all_source_types) >= 2 and len(final_valuations) >= 2:
+        try:
+            from ai_opportunity_index.fact_graph.scoring_integration import apply_verification_adjustment
+            from ai_opportunity_index.fact_graph.verification import verify_company_evidence
+            from ai_opportunity_index.storage.db import get_session
+
+            # All groups belong to the same company
+            company_id = next(
+                (group_by_id[v.group_id].company_id for v in final_valuations if v.group_id in group_by_id),
+                None,
+            )
+            if company_id is not None:
+                session = get_session()
+                try:
+                    verification_result = verify_company_evidence(company_id, session)
+                    result = apply_verification_adjustment(result, verification_result)
+                    logger.info(
+                        "Cross-source verification applied: %d source types, agreement=%.2f",
+                        len(all_source_types),
+                        verification_result.agreement_score,
+                    )
+                except Exception as e:
+                    logger.debug("Cross-source verification skipped: %s", e)
+                finally:
+                    session.close()
+        except ImportError:
+            logger.debug("Cross-source verification module not available")
+
+    return result
 
 
 # ── Full Pipeline ─────────────────────────────────────────────────────────

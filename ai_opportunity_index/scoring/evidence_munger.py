@@ -16,13 +16,47 @@ from pathlib import Path
 
 from ai_opportunity_index.config import EXTRACTED_DIR, RAW_DIR
 from ai_opportunity_index.domains import (
+    CaptureStage,
     EvidenceGroup,
     EvidenceGroupPassage,
     ExtractedItem,
     SourceType,
+    TargetDimension,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Enum normalization helpers ────────────────────────────────────────────
+# LLMs sometimes return non-standard casing or values for target_dimension
+# and capture_stage (e.g. "Cost", "REVENUE", "investing").  Normalise to
+# valid enum members or fall back to a safe default so that Pydantic
+# validation never rejects a passage.
+
+_TD_LOOKUP: dict[str, TargetDimension] = {
+    v.value: v for v in TargetDimension
+}
+_CS_LOOKUP: dict[str, CaptureStage] = {
+    v.value: v for v in CaptureStage
+}
+
+
+def _normalise_target_dimension(raw: str | TargetDimension | None) -> TargetDimension:
+    """Normalise a raw target_dimension value to a valid TargetDimension enum."""
+    if isinstance(raw, TargetDimension):
+        return raw
+    if raw is None:
+        return TargetDimension.GENERAL
+    return _TD_LOOKUP.get(str(raw).lower().strip(), TargetDimension.GENERAL)
+
+
+def _normalise_capture_stage(raw: str | CaptureStage | None) -> CaptureStage:
+    """Normalise a raw capture_stage value to a valid CaptureStage enum."""
+    if isinstance(raw, CaptureStage):
+        return raw
+    if raw is None:
+        return CaptureStage.INVESTED
+    return _CS_LOOKUP.get(str(raw).lower().strip(), CaptureStage.INVESTED)
 
 # Legacy paths (backward compat)
 EXTRACTED_FILINGS_DIR = RAW_DIR / "extracted_filings"
@@ -89,8 +123,8 @@ def _load_passages(
                     source_date=item.source_date,
                     confidence=max(0.0, min(1.0, p.confidence)),
                     reasoning=p.reasoning,
-                    target_dimension=p.target_dimension,
-                    capture_stage=p.capture_stage,
+                    target_dimension=_normalise_target_dimension(p.target_dimension),
+                    capture_stage=_normalise_capture_stage(p.capture_stage),
                     source_url=item.url,
                     source_author=item.author,
                     source_author_role=item.author_role,
@@ -103,6 +137,29 @@ def _load_passages(
 
 
 # ── Legacy loaders (backward compat) ─────────────────────────────────────
+
+
+_cik_cache: dict[str, int | None] = {}
+
+
+def _lookup_cik(ticker: str) -> int | None:
+    """Look up CIK for a ticker from the database, with caching."""
+    upper = ticker.upper()
+    if upper in _cik_cache:
+        return _cik_cache[upper]
+    try:
+        from ai_opportunity_index.storage.db import get_session
+        session = get_session()
+        try:
+            from ai_opportunity_index.storage.models import CompanyModel
+            row = session.query(CompanyModel.cik).filter(CompanyModel.ticker == upper).first()
+            cik = row[0] if row else None
+        finally:
+            session.close()
+    except Exception:
+        cik = None
+    _cik_cache[upper] = cik
+    return cik
 
 
 def _load_filing_passages(ticker: str) -> list[EvidenceGroupPassage]:
@@ -126,6 +183,28 @@ def _load_filing_passages(ticker: str) -> list[EvidenceGroupPassage]:
             m = _re.search(r"(\d{4}-\d{2}-\d{2})", filename)
             if m:
                 filing_date = _parse_date(m.group(1))
+        # Build SEC EDGAR URL from filing metadata
+        filing_url = filing.get("url")
+        if not filing_url:
+            cik = filing.get("cik") or data.get("cik")
+            accession = filing.get("accession_number") or filing.get("accession")
+            if cik and accession:
+                acc_clean = accession.replace("-", "")
+                filing_url = (
+                    f"https://www.sec.gov/Archives/edgar/data/{cik}/"
+                    f"{acc_clean}/{filename}"
+                )
+        # Fallback: look up CIK from database and build EDGAR viewer URL
+        if not filing_url:
+            cik = _lookup_cik(ticker)
+            if cik:
+                # Extract form type from filename (e.g., "10-K_2024-11-01.txt" -> "10-K")
+                form_type = filename.split("_")[0] if "_" in filename else "10-K"
+                filing_url = (
+                    f"https://www.sec.gov/cgi-bin/browse-edgar"
+                    f"?action=getcompany&CIK={cik:010d}&type={form_type}&dateb=&owner=include&count=10"
+                )
+
         for p in filing.get("passages", []):
             text = p.get("passage_text", "")
             if not text or len(text) < 20:
@@ -137,8 +216,11 @@ def _load_filing_passages(ticker: str) -> list[EvidenceGroupPassage]:
                 source_date=filing_date,
                 confidence=max(0.0, min(1.0, p.get("confidence", 0.0))),
                 reasoning=p.get("reasoning", ""),
-                target_dimension=p.get("target_dimension", "general"),
-                capture_stage=p.get("capture_stage", "invested"),
+                target_dimension=_normalise_target_dimension(p.get("target_dimension", "general")),
+                capture_stage=_normalise_capture_stage(p.get("capture_stage", "invested")),
+                source_url=filing_url,
+                source_publisher="SEC EDGAR",
+                source_authority="first_party_disclosure",
             ))
 
     return passages
@@ -174,10 +256,12 @@ def _load_news_passages(ticker: str) -> list[EvidenceGroupPassage]:
                 source_date=pub_date,
                 confidence=max(0.0, min(1.0, p.get("confidence", 0.0))),
                 reasoning=p.get("reasoning", ""),
-                target_dimension=p.get("target_dimension", "general"),
-                capture_stage=p.get("capture_stage", "invested"),
+                target_dimension=_normalise_target_dimension(p.get("target_dimension", "general")),
+                capture_stage=_normalise_capture_stage(p.get("capture_stage", "invested")),
                 source_url=article_url or None,
                 source_author=article_source or None,
+                source_publisher=article_source or None,
+                source_authority="third_party_journalism",
             ))
 
     return passages
@@ -308,9 +392,9 @@ def munge_evidence(
     )
 
     # Split by target_dimension first, then cluster within each dimension
-    by_dimension: dict[str, list[EvidenceGroupPassage]] = {}
+    by_dimension: dict[TargetDimension, list[EvidenceGroupPassage]] = {}
     for p in all_passages:
-        dim = p.target_dimension or "general"
+        dim = _normalise_target_dimension(p.target_dimension)
         by_dimension.setdefault(dim, []).append(p)
 
     evidence_groups: list[EvidenceGroup] = []

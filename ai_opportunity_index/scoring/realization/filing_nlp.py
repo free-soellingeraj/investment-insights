@@ -6,10 +6,8 @@ ClassifiedScorerOutput with cost/revenue/general classification.
 """
 
 import asyncio
-import json
 import logging
 
-from ai_opportunity_index.config import LLM_EXTRACTION_MODEL, get_google_provider
 from ai_opportunity_index.prompts.loader import load_prompt
 from ai_opportunity_index.scoring.evidence_classification import (
     CaptureStage,
@@ -34,24 +32,21 @@ _STAGE_MAP = {
 
 
 def _get_agent():
-    """Lazy-init pydantic_ai agent for filing extraction."""
-    from pydantic_ai import Agent
-    from pydantic_ai.models.google import GoogleModel
-
+    """Lazy-init LLM agent for filing extraction."""
+    from ai_opportunity_index.llm_backend import get_agent
     from ai_opportunity_index.scoring.pipeline.llm_extractors import ExtractedPassages
 
-    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-    return Agent(model, output_type=ExtractedPassages)
+    return get_agent(output_type=ExtractedPassages)
 
 
-def score_filing_classified(text: str) -> ClassifiedScorerOutput:
+def score_filing_classified(text: str) -> ClassifiedScorerOutput | None:
     """Compute classified filing NLP scores with cost/revenue/general breakdown.
 
     Uses Gemini Flash to extract structured evidence from filing text.
-    Returns ClassifiedScorerOutput with target-dimension scores and evidence.
+    Returns ClassifiedScorerOutput, or None if no data/extraction fails.
     """
     if not text or len(text) < 100:
-        return ClassifiedScorerOutput(overall_score=0.0)
+        return None
 
     try:
         agent = _get_agent()
@@ -68,7 +63,7 @@ def score_filing_classified(text: str) -> ClassifiedScorerOutput:
         extracted = result.output
     except Exception as e:
         logger.warning("LLM filing extraction failed: %s", e)
-        return ClassifiedScorerOutput(overall_score=0.0)
+        return None
 
     # Convert extracted passages to ClassifiedEvidence and accumulate scores
     evidence_items: list[ClassifiedEvidence] = []
@@ -117,14 +112,15 @@ def score_filing_classified(text: str) -> ClassifiedScorerOutput:
 async def score_filing_classified_async(
     text: str,
     semaphore: asyncio.Semaphore | None = None,
-) -> ClassifiedScorerOutput:
+) -> ClassifiedScorerOutput | None:
     """Async version of score_filing_classified.
 
     Uses ``await agent.run(prompt)`` instead of ``agent.run_sync(prompt)``.
     An optional semaphore gates concurrent LLM calls.
+    Returns None if no data/extraction fails.
     """
     if not text or len(text) < 100:
-        return ClassifiedScorerOutput(overall_score=0.0)
+        return None
 
     try:
         agent = _get_agent()
@@ -150,7 +146,7 @@ async def score_filing_classified_async(
         extracted = result.output
     except Exception as e:
         logger.warning("LLM filing extraction failed: %s", e)
-        return ClassifiedScorerOutput(overall_score=0.0)
+        return None
 
     # Convert extracted passages to ClassifiedEvidence and accumulate scores
     evidence_items: list[ClassifiedEvidence] = []

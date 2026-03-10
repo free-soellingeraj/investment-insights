@@ -43,7 +43,20 @@ class CompanyDollarScore(BaseModel):
     revenue_opportunity_usd: float = 0.0
     total_opportunity_usd: float = 0.0
 
-    # Per-stage breakdowns
+    # Capture totals (evidence-backed spend/savings)
+    cost_capture_usd: float = 0.0
+    revenue_capture_usd: float = 0.0
+    total_investment_usd: float = 0.0
+
+    # Per-year breakdowns
+    cost_capture_y1: float = 0.0
+    cost_capture_y2: float = 0.0
+    cost_capture_y3: float = 0.0
+    revenue_capture_y1: float = 0.0
+    revenue_capture_y2: float = 0.0
+    revenue_capture_y3: float = 0.0
+
+    # Per-stage breakdowns (legacy)
     cost_realized_usd: float = 0.0
     cost_invested_usd: float = 0.0
     cost_planned_usd: float = 0.0
@@ -56,6 +69,7 @@ class CompanyDollarScore(BaseModel):
 
     # Evidence counts
     total_evidence_count: int = 0
+    evidence_count: int = 0
     cost_evidence_count: int = 0
     revenue_evidence_count: int = 0
     general_evidence_count: int = 0

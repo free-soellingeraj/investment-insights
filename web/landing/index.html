@@ -538,7 +538,7 @@
             }], { paper_bgcolor: 'transparent', font: { color: '#9ca3af', size: 11 }, margin: { t: 30, b: 30, l: 30, r: 30 }, title: { text: 'By Sector', font: { color: '#d1d5db' } }, showlegend: false }, { responsive: true });
 
             const quadCounts = {};
-            const quadLabels = { 'high_opp_high_real': 'AI Leaders', 'high_opp_low_real': 'Untapped Potential', 'low_opp_high_real': 'Over-investing?', 'low_opp_low_real': 'AI-Resistant' };
+            const quadLabels = { 'high_opp_high_real': 'AI Leaders', 'high_opp_low_real': 'Untapped Potential', 'low_opp_high_real': 'Over-investing?', 'low_opp_low_real': 'Emerging' };
             companies.forEach(c => { const q = quadLabels[c.quadrant] || 'Unknown'; quadCounts[q] = (quadCounts[q] || 0) + 1; });
             Plotly.newPlot('pie-quadrant', [{
                 labels: Object.keys(quadCounts), values: Object.values(quadCounts),

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ai_opportunity_index.cache import cache_is_fresh, stamp_cache
-from ai_opportunity_index.config import LLM_EXTRACTION_MODEL, RAW_DIR, get_google_provider
+from ai_opportunity_index.config import RAW_DIR
 from ai_opportunity_index.prompts.loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -22,14 +22,11 @@ EXTRACTED_NEWS_DIR = RAW_DIR / "extracted_news"
 
 
 def _get_agent():
-    """Lazy-init pydantic_ai agent for news extraction."""
-    from pydantic_ai import Agent
-    from pydantic_ai.models.google import GoogleModel
-
+    """Lazy-init LLM agent for news extraction."""
+    from ai_opportunity_index.llm_backend import get_agent
     from ai_opportunity_index.scoring.pipeline.llm_extractors import ExtractedPassages
 
-    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-    return Agent(model, output_type=ExtractedPassages)
+    return get_agent(output_type=ExtractedPassages)
 
 
 async def extract_news_for_company(

@@ -1,0 +1,628 @@
+{
+  "recency_decay": {
+    "description": "compute_recency: 0.7^years_old, floor 0.3",
+    "cases": [
+      {
+        "id": "today",
+        "evidence_date": "2026-03-08",
+        "reference_date": "2026-03-08",
+        "expected": 1.0
+      },
+      {
+        "id": "1_year_old",
+        "evidence_date": "2025-03-08",
+        "reference_date": "2026-03-08",
+        "expected_approx": 0.7,
+        "tolerance": 0.01
+      },
+      {
+        "id": "2_years_old",
+        "evidence_date": "2024-03-08",
+        "reference_date": "2026-03-08",
+        "expected_approx": 0.49,
+        "tolerance": 0.01
+      },
+      {
+        "id": "5_years_old",
+        "evidence_date": "2021-03-08",
+        "reference_date": "2026-03-08",
+        "expected_approx": 0.3,
+        "tolerance": 0.01,
+        "note": "floors at 0.3"
+      },
+      {
+        "id": "none_date",
+        "evidence_date": null,
+        "reference_date": "2026-03-08",
+        "expected": 0.3,
+        "note": "None date returns floor"
+      },
+      {
+        "id": "future_date",
+        "evidence_date": "2027-01-01",
+        "reference_date": "2026-03-08",
+        "expected": 1.0,
+        "note": "future dates clamp years_old to 0"
+      }
+    ]
+  },
+  "magnitude_saturation": {
+    "description": "compute_magnitude: dollar_mid / company_revenue, capped at 1.0",
+    "cases": [
+      {
+        "id": "small_amount",
+        "dollar_mid": 1000000,
+        "company_revenue": 10000000000,
+        "expected": 0.0001
+      },
+      {
+        "id": "medium_amount",
+        "dollar_mid": 500000000,
+        "company_revenue": 10000000000,
+        "expected": 0.05
+      },
+      {
+        "id": "large_amount_exceeds_revenue",
+        "dollar_mid": 20000000000,
+        "company_revenue": 10000000000,
+        "expected": 1.0,
+        "note": "capped at 1.0"
+      },
+      {
+        "id": "equal_to_revenue",
+        "dollar_mid": 5000000,
+        "company_revenue": 5000000,
+        "expected": 1.0
+      },
+      {
+        "id": "zero_dollar",
+        "dollar_mid": 0,
+        "company_revenue": 10000000000,
+        "expected": 0.0,
+        "note": "falsy dollar_mid returns 0"
+      },
+      {
+        "id": "none_dollar",
+        "dollar_mid": null,
+        "company_revenue": 10000000000,
+        "expected": 0.0
+      },
+      {
+        "id": "zero_revenue",
+        "dollar_mid": 1000000,
+        "company_revenue": 0,
+        "expected": 0.0,
+        "note": "zero revenue returns 0"
+      },
+      {
+        "id": "none_revenue",
+        "dollar_mid": 1000000,
+        "company_revenue": null,
+        "expected": 0.0
+      },
+      {
+        "id": "negative_dollar",
+        "dollar_mid": -500000,
+        "company_revenue": 10000000,
+        "expected": 0.05,
+        "note": "abs(dollar_mid) is used"
+      }
+    ]
+  },
+  "factor_score": {
+    "description": "compute_factor_score: specificity * magnitude * stage_weight * recency",
+    "cases": [
+      {
+        "id": "all_ones",
+        "specificity": 1.0,
+        "magnitude": 1.0,
+        "stage_weight": 1.0,
+        "recency": 1.0,
+        "expected": 1.0
+      },
+      {
+        "id": "all_zeros",
+        "specificity": 0.0,
+        "magnitude": 0.0,
+        "stage_weight": 0.0,
+        "recency": 0.0,
+        "expected": 0.0
+      },
+      {
+        "id": "typical_plan",
+        "specificity": 0.6,
+        "magnitude": 0.05,
+        "stage_weight": 0.3,
+        "recency": 0.7,
+        "expected": 0.0063
+      },
+      {
+        "id": "typical_investment",
+        "specificity": 0.8,
+        "magnitude": 0.1,
+        "stage_weight": 0.7,
+        "recency": 0.9,
+        "expected": 0.0504
+      },
+      {
+        "id": "typical_capture",
+        "specificity": 0.9,
+        "magnitude": 0.2,
+        "stage_weight": 1.0,
+        "recency": 1.0,
+        "expected": 0.18
+      },
+      {
+        "id": "one_zero_factor",
+        "specificity": 0.9,
+        "magnitude": 0.0,
+        "stage_weight": 1.0,
+        "recency": 1.0,
+        "expected": 0.0,
+        "note": "any zero factor zeroes the result"
+      }
+    ]
+  },
+  "dimension_aggregation": {
+    "description": "1 - exp(-sum_of_factor_scores), capped at 1.0",
+    "cases": [
+      {
+        "id": "zero_sum",
+        "raw_sum": 0.0,
+        "expected": 0.0
+      },
+      {
+        "id": "small_sum",
+        "raw_sum": 0.1,
+        "expected_approx": 0.0952,
+        "tolerance": 0.001
+      },
+      {
+        "id": "medium_sum",
+        "raw_sum": 0.5,
+        "expected_approx": 0.3935,
+        "tolerance": 0.001
+      },
+      {
+        "id": "large_sum",
+        "raw_sum": 1.0,
+        "expected_approx": 0.6321,
+        "tolerance": 0.001
+      },
+      {
+        "id": "very_large_sum",
+        "raw_sum": 5.0,
+        "expected_approx": 0.9933,
+        "tolerance": 0.001
+      },
+      {
+        "id": "huge_sum",
+        "raw_sum": 20.0,
+        "expected_approx": 1.0,
+        "tolerance": 0.0001,
+        "note": "effectively capped at 1.0"
+      }
+    ]
+  },
+  "roi_calculation": {
+    "description": "ROI = min(ROI_CAP, capture / max(opportunity, ROI_MIN_DENOMINATOR))",
+    "cases": [
+      {
+        "id": "normal_case",
+        "cost_opportunity": 0.5,
+        "revenue_opportunity": 0.5,
+        "cost_capture": 0.25,
+        "revenue_capture": 0.25,
+        "general_investment": 0.1,
+        "expected_cost_roi": 0.5,
+        "expected_revenue_roi": 0.5,
+        "expected_combined_roi": 0.5
+      },
+      {
+        "id": "zero_opportunity_uses_min_denom",
+        "cost_opportunity": 0.0,
+        "revenue_opportunity": 0.0,
+        "cost_capture": 0.01,
+        "revenue_capture": 0.01,
+        "general_investment": 0.0,
+        "expected_cost_roi": 1.0,
+        "expected_revenue_roi": 1.0,
+        "expected_combined_roi": 1.0
+      },
+      {
+        "id": "capped_at_2",
+        "cost_opportunity": 0.1,
+        "revenue_opportunity": 0.1,
+        "cost_capture": 0.9,
+        "revenue_capture": 0.9,
+        "general_investment": 0.0,
+        "expected_cost_roi": 2.0,
+        "expected_revenue_roi": 2.0,
+        "expected_combined_roi": 2.0,
+        "note": "9.0 would be uncapped; capped to ROI_CAP=2.0"
+      },
+      {
+        "id": "asymmetric_roi",
+        "cost_opportunity": 0.8,
+        "revenue_opportunity": 0.2,
+        "cost_capture": 0.4,
+        "revenue_capture": 0.6,
+        "general_investment": 0.0,
+        "expected_cost_roi": 0.5,
+        "expected_revenue_roi": 2.0,
+        "expected_combined_roi": 1.25
+      }
+    ]
+  },
+  "ai_index_sigmoid": {
+    "description": "AI Index: P(capture) * dollar_potential",
+    "cases": [
+      {
+        "id": "all_plan",
+        "plan_dollars": 1000000,
+        "investment_dollars": 0,
+        "capture_dollars": 0,
+        "opportunity_usd": null,
+        "note": "weighted = 0.10, low probability"
+      },
+      {
+        "id": "all_investment",
+        "plan_dollars": 0,
+        "investment_dollars": 1000000,
+        "capture_dollars": 0,
+        "opportunity_usd": null,
+        "note": "weighted = 0.35 = midpoint, moderate probability"
+      },
+      {
+        "id": "all_capture",
+        "plan_dollars": 0,
+        "investment_dollars": 0,
+        "capture_dollars": 1000000,
+        "opportunity_usd": null,
+        "note": "weighted = 0.70, high probability"
+      },
+      {
+        "id": "mixed_evidence",
+        "plan_dollars": 300000,
+        "investment_dollars": 500000,
+        "capture_dollars": 200000,
+        "opportunity_usd": null,
+        "note": "weighted = (0.10*300k + 0.35*500k + 0.70*200k) / 1M = 0.345"
+      },
+      {
+        "id": "zero_evidence",
+        "plan_dollars": 0,
+        "investment_dollars": 0,
+        "capture_dollars": 0,
+        "opportunity_usd": null,
+        "expected_probability": 0.05,
+        "expected_ai_index_usd": 0.0
+      },
+      {
+        "id": "with_opportunity_usd",
+        "plan_dollars": 500000,
+        "investment_dollars": 500000,
+        "capture_dollars": 0,
+        "opportunity_usd": 5000000,
+        "note": "dollar_base should be opportunity_usd, not evidence_total"
+      },
+      {
+        "id": "zero_evidence_with_opportunity",
+        "plan_dollars": 0,
+        "investment_dollars": 0,
+        "capture_dollars": 0,
+        "opportunity_usd": 5000000,
+        "note": "zero evidence but nonzero opp_usd - special case"
+      }
+    ]
+  },
+  "quadrant_assignment": {
+    "description": "Quadrant assignment based on opportunity/realization thresholds",
+    "cases": [
+      {
+        "id": "high_opp_high_real",
+        "opportunity": 0.7,
+        "realization": 0.7,
+        "expected_quadrant": "high_opp_high_real",
+        "expected_label": "AI Leaders"
+      },
+      {
+        "id": "high_opp_low_real",
+        "opportunity": 0.7,
+        "realization": 0.3,
+        "expected_quadrant": "high_opp_low_real",
+        "expected_label": "Untapped Potential"
+      },
+      {
+        "id": "low_opp_high_real",
+        "opportunity": 0.3,
+        "realization": 0.7,
+        "expected_quadrant": "low_opp_high_real",
+        "expected_label": "Over-investing?"
+      },
+      {
+        "id": "low_opp_low_real",
+        "opportunity": 0.3,
+        "realization": 0.3,
+        "expected_quadrant": "low_opp_low_real",
+        "expected_label": "Emerging"
+      },
+      {
+        "id": "exact_boundary_high",
+        "opportunity": 0.5,
+        "realization": 0.5,
+        "expected_quadrant": "high_opp_high_real",
+        "expected_label": "AI Leaders",
+        "note": ">= threshold means high"
+      },
+      {
+        "id": "boundary_opp_high_real_low",
+        "opportunity": 0.5,
+        "realization": 0.49,
+        "expected_quadrant": "high_opp_low_real",
+        "expected_label": "Untapped Potential"
+      },
+      {
+        "id": "boundary_opp_low_real_high",
+        "opportunity": 0.49,
+        "realization": 0.5,
+        "expected_quadrant": "low_opp_high_real",
+        "expected_label": "Over-investing?"
+      }
+    ]
+  },
+  "cost_capture_formula": {
+    "description": "employees * avg_salary * ai_applicability * productivity_gain * evidence_fraction",
+    "cases": [
+      {
+        "id": "tech_company",
+        "employees": 10000,
+        "sector": "Technology",
+        "confidence": 0.8,
+        "stage": "realized",
+        "expected_salary": 100000,
+        "note": "annual = 10000 * 100000 * 0.15 * 0.15 * (0.8*1.0)"
+      },
+      {
+        "id": "small_company",
+        "employees": 100,
+        "sector": "Healthcare",
+        "confidence": 0.5,
+        "stage": "planned",
+        "expected_salary": 70000,
+        "note": "annual = 100 * 70000 * 0.15 * 0.15 * (0.5*0.3)"
+      },
+      {
+        "id": "zero_employees",
+        "employees": 0,
+        "sector": "Technology",
+        "confidence": 0.9,
+        "stage": "invested",
+        "expected_annual": 0.0
+      }
+    ]
+  },
+  "revenue_capture_formula": {
+    "description": "revenue * penetration_rate * evidence_fraction (general), or per-product bracket",
+    "cases": [
+      {
+        "id": "large_revenue_general",
+        "revenue": 10000000000,
+        "confidence": 0.9,
+        "stage": "invested",
+        "is_product": false,
+        "source_type": "filing",
+        "note": "annual = 10B * 0.05 * (0.9*0.7)"
+      },
+      {
+        "id": "product_news_large",
+        "revenue": 10000000000,
+        "confidence": 0.8,
+        "stage": "realized",
+        "is_product": true,
+        "source_type": "news",
+        "expected_base_annual": 5000000,
+        "note": "per-product bracket for 1B+ = $5M"
+      },
+      {
+        "id": "product_news_small",
+        "revenue": 50000000,
+        "confidence": 0.7,
+        "stage": "planned",
+        "is_product": false,
+        "source_type": "news",
+        "expected_base_annual": 500000,
+        "note": "news source_type uses per-product bracket: $100M+ = $500K"
+      }
+    ]
+  },
+  "product_revenue_brackets": {
+    "description": "_product_revenue_estimate: revenue bracket to per-product estimate",
+    "cases": [
+      {
+        "id": "over_1B",
+        "revenue": 5000000000,
+        "expected": 5000000
+      },
+      {
+        "id": "exactly_1B",
+        "revenue": 1000000000,
+        "expected": 5000000
+      },
+      {
+        "id": "over_100M",
+        "revenue": 500000000,
+        "expected": 500000
+      },
+      {
+        "id": "exactly_100M",
+        "revenue": 100000000,
+        "expected": 500000
+      },
+      {
+        "id": "small_company",
+        "revenue": 10000000,
+        "expected": 50000
+      },
+      {
+        "id": "zero_revenue",
+        "revenue": 0,
+        "expected": 50000
+      }
+    ]
+  },
+  "text_similarity": {
+    "description": "_text_similarity: SequenceMatcher ratio on first 300 chars lowered",
+    "cases": [
+      {
+        "id": "identical",
+        "a": "The company is investing heavily in AI-driven automation across its supply chain.",
+        "b": "The company is investing heavily in AI-driven automation across its supply chain.",
+        "expected": 1.0
+      },
+      {
+        "id": "nearly_identical",
+        "a": "The company is investing heavily in AI-driven automation across its supply chain.",
+        "b": "The company is investing heavily in AI driven automation across its supply chain.",
+        "expected_min": 0.95
+      },
+      {
+        "id": "similar_topic",
+        "a": "Microsoft announced a $10 billion investment in AI infrastructure for cloud services.",
+        "b": "Microsoft revealed a $10B AI infrastructure investment for its cloud computing division.",
+        "expected_min": 0.5
+      },
+      {
+        "id": "completely_different",
+        "a": "The company reported quarterly earnings of $5.2 billion in the fiscal fourth quarter.",
+        "b": "New regulations require companies to disclose climate change risks in their annual filings.",
+        "expected_max": 0.4
+      },
+      {
+        "id": "empty_strings",
+        "a": "",
+        "b": "",
+        "expected": 1.0
+      },
+      {
+        "id": "case_insensitive",
+        "a": "AI INVESTMENT IN CLOUD COMPUTING",
+        "b": "ai investment in cloud computing",
+        "expected": 1.0,
+        "note": "lowered before comparison"
+      }
+    ]
+  },
+  "evidence_grouping": {
+    "description": "_group_passages: greedy clustering by text similarity",
+    "cases": [
+      {
+        "id": "two_similar_one_different",
+        "passages": [
+          "The company invested $500M in AI infrastructure to modernize its data centers and computing platforms.",
+          "The company invested $500M in AI infrastructure to modernize data centers and cloud computing.",
+          "Revenue grew 15% year-over-year driven by strong consumer demand in the holiday season."
+        ],
+        "expected_group_count": 2,
+        "expected_first_group_size": 2
+      },
+      {
+        "id": "all_different",
+        "passages": [
+          "Apple launched a new AI-powered chip for its latest iPhone series.",
+          "The Federal Reserve raised interest rates by 25 basis points.",
+          "Tesla reported record deliveries in Q4 with over 500,000 vehicles."
+        ],
+        "expected_group_count": 3
+      },
+      {
+        "id": "single_passage",
+        "passages": [
+          "The company is exploring generative AI applications for customer service."
+        ],
+        "expected_group_count": 1,
+        "expected_first_group_size": 1
+      },
+      {
+        "id": "empty_list",
+        "passages": [],
+        "expected_group_count": 0
+      }
+    ]
+  },
+  "horizon_estimation": {
+    "description": "FormulaHorizonEstimator: stage-based multipliers on base_annual",
+    "cases": [
+      {
+        "id": "realized",
+        "stage": "realized",
+        "base_annual": 1000000,
+        "expected_y1": 1000000,
+        "expected_y2": 1000000,
+        "expected_y3": 1000000,
+        "expected_shape": "flat"
+      },
+      {
+        "id": "invested",
+        "stage": "invested",
+        "base_annual": 1000000,
+        "expected_y1": 330000,
+        "expected_y2": 660000,
+        "expected_y3": 1000000,
+        "expected_shape": "linear_ramp"
+      },
+      {
+        "id": "planned",
+        "stage": "planned",
+        "base_annual": 1000000,
+        "expected_y1": 100000,
+        "expected_y2": 400000,
+        "expected_y3": 1000000,
+        "expected_shape": "back_loaded"
+      }
+    ]
+  },
+  "stage_multiplier": {
+    "description": "FormulaDollarEstimator._stage_multiplier",
+    "cases": [
+      {"stage": "realized", "expected": 1.0},
+      {"stage": "invested", "expected": 0.7},
+      {"stage": "planned", "expected": 0.3}
+    ]
+  },
+  "subsidiary_attribution": {
+    "description": "compute_subsidiary_attribution: parent + weighted subsidiary scores, capped boost",
+    "cases": [
+      {
+        "id": "single_subsidiary",
+        "parent_opportunity": 0.6,
+        "parent_realization": 0.4,
+        "subsidiaries": [
+          {"company_name": "SubCo", "ownership_pct": 0.8, "opportunity": 0.5, "realization": 0.3}
+        ],
+        "expected_opp_boost": 0.2,
+        "expected_real_boost": 0.2,
+        "note": "0.8*0.5=0.4 capped to 0.2; 0.8*0.3=0.24 capped to 0.2"
+      },
+      {
+        "id": "no_subsidiaries",
+        "parent_opportunity": 0.6,
+        "parent_realization": 0.4,
+        "subsidiaries": [],
+        "expected_adjusted_opp": 0.6,
+        "expected_adjusted_real": 0.4
+      },
+      {
+        "id": "result_capped_at_1",
+        "parent_opportunity": 0.95,
+        "parent_realization": 0.95,
+        "subsidiaries": [
+          {"company_name": "SubCo", "ownership_pct": 1.0, "opportunity": 0.5, "realization": 0.5}
+        ],
+        "expected_adjusted_opp": 1.0,
+        "expected_adjusted_real": 1.0,
+        "note": "0.95 + 0.2 capped to 1.0"
+      }
+    ]
+  }
+}

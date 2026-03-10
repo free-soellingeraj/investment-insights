@@ -46,6 +46,12 @@ def compute_index(
 
     Returns dict with: opportunity, realization, quadrant, quadrant_label.
     """
+    # Guard against NaN inputs
+    if math.isnan(opportunity_score):
+        opportunity_score = 0.0
+    if math.isnan(realization_score):
+        realization_score = 0.0
+
     if opportunity_score >= opp_threshold:
         if realization_score >= real_threshold:
             quadrant = Quadrant.HIGH_OPP_HIGH_REAL
@@ -87,6 +93,16 @@ def compute_index_4v(
 
     Returns dict with 4 values, ROI, and legacy compatibility fields.
     """
+    # Guard against NaN inputs — replace with 0.0
+    def _clean(v: float) -> float:
+        return 0.0 if (v is None or math.isnan(v) or math.isinf(v)) else v
+
+    cost_opportunity = _clean(cost_opportunity)
+    revenue_opportunity = _clean(revenue_opportunity)
+    cost_capture = _clean(cost_capture)
+    revenue_capture = _clean(revenue_capture)
+    general_investment = _clean(general_investment)
+
     # ROI metrics (general excluded from ROI, it's tracked separately)
     cost_roi = min(ROI_CAP, cost_capture / max(cost_opportunity, ROI_MIN_DENOMINATOR))
     revenue_roi = min(ROI_CAP, revenue_capture / max(revenue_opportunity, ROI_MIN_DENOMINATOR))
@@ -161,9 +177,21 @@ def compute_ai_index(
         opportunity_usd, evidence_dollars, plan_dollars, investment_dollars,
         capture_dollars.
     """
-    evidence_total = plan_dollars + investment_dollars + capture_dollars
+    # Guard against NaN dollar inputs
+    def _clean_dollars(v: float) -> float:
+        if v is None or math.isnan(v) or math.isinf(v):
+            return 0.0
+        return v
 
-    if evidence_total <= 0 and not opportunity_usd:
+    plan_dollars = _clean_dollars(plan_dollars)
+    investment_dollars = _clean_dollars(investment_dollars)
+    capture_dollars = _clean_dollars(capture_dollars)
+    if opportunity_usd is not None:
+        opportunity_usd = _clean_dollars(opportunity_usd) or None
+
+    evidence_total = max(0.0, plan_dollars + investment_dollars + capture_dollars)
+
+    if evidence_total <= 0:
         return {
             "ai_index_usd": 0.0,
             "capture_probability": AI_INDEX_P_BASE,
@@ -192,8 +220,9 @@ def compute_ai_index(
 
     p_capture = AI_INDEX_P_BASE + (1.0 - AI_INDEX_P_BASE) * raw_sigmoid
 
-    # Dollar base: prefer structural opportunity when available
-    dollar_base = opportunity_usd if opportunity_usd is not None else evidence_total
+    # Dollar base: always grounded in actual evidence.
+    # Structural opportunity_usd is stored for context but never inflates the index.
+    dollar_base = evidence_total
     ai_index = p_capture * dollar_base
 
     return {
@@ -285,10 +314,16 @@ def rank_companies(df: pd.DataFrame) -> pd.DataFrame:
     """Rank companies within the index.
 
     Adds rank columns for opportunity, realization, and a combined rank.
+    NaN scores are ranked last (given the worst rank).
     """
     df = df.copy()
-    df["opportunity_rank"] = df["composite_opportunity"].rank(ascending=False, method="min").astype(int)
-    df["realization_rank"] = df["composite_realization"].rank(ascending=False, method="min").astype(int)
+
+    # Fill NaN scores with 0 for ranking purposes (ranked last)
+    opp = df["composite_opportunity"].fillna(0)
+    real = df["composite_realization"].fillna(0)
+
+    df["opportunity_rank"] = opp.rank(ascending=False, method="min").astype(int)
+    df["realization_rank"] = real.rank(ascending=False, method="min").astype(int)
 
     # Combined rank: average of the two ranks
     df["combined_rank"] = ((df["opportunity_rank"] + df["realization_rank"]) / 2).rank(method="min").astype(int)

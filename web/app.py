@@ -1,12 +1,14 @@
 """Litestar web application — landing page, dashboard, Stripe, API endpoints."""
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 import resend
 import stripe
 from litestar import Litestar, Request, get, post, put
+from litestar.config.cors import CORSConfig
 from litestar.response import File, Redirect, Template
 from litestar.static_files import create_static_files_router
 from litestar.status_codes import HTTP_400_BAD_REQUEST, HTTP_403_FORBIDDEN, HTTP_404_NOT_FOUND, HTTP_500_INTERNAL_SERVER_ERROR, HTTP_503_SERVICE_UNAVAILABLE
@@ -33,6 +35,20 @@ from ai_opportunity_index.storage.db import (
 )
 from ai_opportunity_index.domains import Notification
 from web.pipeline_controller import PipelineAPIController
+from web.graphql.schema import GraphQLController
+from web.agents_api import (
+    get_agents_status, post_bulletin_action, dismiss_resolved_items,
+    get_agent_teams, get_agent_team_detail,
+    get_agent_channels, get_channel_messages, post_channel_message,
+    get_agent_plans, get_agent_plan_detail, post_plan_comment, update_plan_status,
+    get_agent_projects, get_agent_project_detail,
+    get_team_metrics, get_all_teams_metrics, post_project_review,
+)
+from web.dashboard_api import dashboard_stats
+from web.ratings_api import api_ratings_create, api_ratings_list, api_ratings_recent, api_ratings_summary
+from web.passages_api import api_passages
+from web.chat_api import api_chat_create, api_chat_list, api_chat_toggle_addressed
+from web.sse import sse_agents, sse_pipeline, sse_ratings, sse_scores, sse_agent_chat
 from web.config import (
     ADMIN_EMAIL,
     BASE_URL,
@@ -1216,6 +1232,9 @@ async def status_page() -> Any:
     <div class="nav-links">
       <a href="/dashboard">Dashboard</a>
       <a href="/status" class="active">Pipeline Status</a>
+      <a href="/trading">Trading</a>
+      <a href="/changelog">Changelog</a>
+      <a href="/internals">Internals</a>
     </div>
   </div>
 </nav>
@@ -2049,30 +2068,86 @@ async def login(request: Request) -> dict:
     if not subscriber or subscriber.status != "active":
         return {"error": "No active subscription found for that email."}
 
-    dashboard_url = f"{BASE_URL}/dashboard?token={subscriber.access_token}"
+    # Build magic link — point to Next.js frontend if FRONTEND_URL is set,
+    # otherwise fall back to the Litestar landing page dashboard.
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    dashboard_url = f"{frontend_url}/?token={subscriber.access_token}"
 
     if RESEND_API_KEY:
+        email_html = (
+            "<div style='font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px'>"
+            "<h1 style='color:#1a1a2e'>AI Opportunity Index</h1>"
+            "<p>Click the link below to access your dashboard:</p>"
+            f"<p><a href='{dashboard_url}' style='display:inline-block;background:#6366f1;"
+            "color:white;padding:12px 24px;border-radius:8px;text-decoration:none;"
+            "font-weight:600'>Open Dashboard</a></p>"
+            "<p style='color:#999;font-size:12px'>If you didn't request this, you can ignore this email.</p>"
+            "</div>"
+        )
         try:
             resend.Emails.send({
-                "from": f"Winona Quantitative Research <{FROM_EMAIL}>",
+                "from": f"AI Opportunity Index <{FROM_EMAIL}>",
                 "to": [email],
                 "subject": "Your AI Opportunity Index Login Link",
-                "html": (
-                    "<div style='font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px'>"
-                    "<h1 style='color:#1a1a2e'>AI Opportunity Index</h1>"
-                    "<p>Click the link below to access your dashboard:</p>"
-                    f"<p><a href='{dashboard_url}' style='display:inline-block;background:#6366f1;"
-                    "color:white;padding:12px 24px;border-radius:8px;text-decoration:none;"
-                    "font-weight:600'>Open Dashboard</a></p>"
-                    "<p style='color:#999;font-size:12px'>If you didn't request this, you can ignore this email.</p>"
-                    "</div>"
-                ),
+                "html": email_html,
             })
         except Exception as e:
             logger.error("Failed to send login email to %s: %s", email, e)
             return {"error": "Failed to send email. Please try again."}
 
     return {"ok": True}
+
+
+@post("/api/auth/token-login")
+async def token_login(request: Request) -> dict:
+    """Validate a token directly and return user info. Used by Next.js frontend."""
+    body = await request.json()
+    token = body.get("token", "").strip()
+
+    if not token:
+        return {"error": "Token is required"}
+
+    subscriber = get_subscriber_by_token(token)
+    if not subscriber:
+        return {"error": "Invalid token"}
+    if subscriber.status != "active":
+        return {"error": "Subscription is not active"}
+
+    return {
+        "ok": True,
+        "user": {
+            "email": subscriber.email,
+            "plan": subscriber.plan_tier,
+            "status": subscriber.status,
+        },
+        "token": subscriber.access_token,
+    }
+
+
+@get("/api/auth/me")
+async def auth_me(request: Request) -> dict:
+    """Return current user info from Authorization header."""
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip() if auth_header.startswith("Bearer ") else ""
+
+    if not token:
+        token = request.query_params.get("token", "").strip()
+
+    if not token:
+        return {"error": "Not authenticated", "user": None}
+
+    subscriber = get_subscriber_by_token(token)
+    if not subscriber or subscriber.status != "active":
+        return {"error": "Invalid or inactive token", "user": None}
+
+    return {
+        "ok": True,
+        "user": {
+            "email": subscriber.email,
+            "plan": subscriber.plan_tier,
+            "status": subscriber.status,
+        },
+    }
 
 
 # ── Stripe Checkout ───────────────────────────────────────────────────────
@@ -2501,6 +2576,1147 @@ async def api_portfolio(variant: str) -> Any:
     return {"variant": variant, "holdings": all_holdings[variant]}
 
 
+# ── Changelog Page ────────────────────────────────────────────────────────
+
+
+@get("/changelog")
+async def changelog_page() -> Any:
+    """Changelog page showing all releases in a timeline layout."""
+    from litestar.response import Response
+    from ai_opportunity_index.changelog import load_changelog
+
+    releases = load_changelog()
+
+    # Build release HTML
+    change_type_colors = {
+        "feature": ("bg-green-900/50 text-green-400", "New"),
+        "improvement": ("bg-blue-900/50 text-blue-400", "Improved"),
+        "fix": ("bg-red-900/50 text-red-400", "Fixed"),
+        "architecture": ("bg-purple-900/50 text-purple-400", "Architecture"),
+        "data": ("bg-yellow-900/50 text-yellow-400", "Data"),
+        "infrastructure": ("bg-gray-700/50 text-gray-300", "Infra"),
+    }
+
+    releases_html = ""
+    for release in releases:
+        status_badge = ""
+        if release.status == "in-progress":
+            status_badge = '<span style="background:#854d0e;color:#fbbf24;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">IN PROGRESS</span>'
+        elif release.status == "planned":
+            status_badge = '<span style="background:#1e3a5f;color:#60a5fa;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">PLANNED</span>'
+
+        date_str = release.date.strftime("%B %d, %Y") if release.date else ""
+
+        # Group changes by type
+        groups: dict[str, list] = {}
+        for change in release.changes:
+            ct = change.change_type.value if hasattr(change.change_type, "value") else change.change_type
+            groups.setdefault(ct, []).append(change)
+
+        changes_html = ""
+        for ct, entries in groups.items():
+            badge_cls, badge_label = change_type_colors.get(ct, ("bg-gray-700/50 text-gray-300", ct))
+            for entry in entries:
+                component_badge = f'<span style="background:#1e293b;color:#94a3b8;padding:1px 6px;border-radius:3px;font-size:10px;margin-left:6px;">{entry.component}</span>'
+                sha_link = ""
+                if entry.commit_sha:
+                    sha_link = f' <a href="#" style="color:#6366f1;font-size:11px;text-decoration:none;">{entry.commit_sha[:7]}</a>'
+                pr_link = ""
+                if entry.pr_number:
+                    pr_link = f' <a href="#" style="color:#6366f1;font-size:11px;text-decoration:none;">#{entry.pr_number}</a>'
+
+                changes_html += f'''
+                <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #1e293b;">
+                    <span style="padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;white-space:nowrap;" class="{badge_cls}">{badge_label}</span>
+                    <div style="flex:1;">
+                        <span style="color:#e2e8f0;font-size:13px;">{entry.description}</span>
+                        {component_badge}{sha_link}{pr_link}
+                    </div>
+                </div>'''
+
+        releases_html += f'''
+        <div style="position:relative;padding-left:32px;margin-bottom:32px;">
+            <div style="position:absolute;left:0;top:6px;width:16px;height:16px;background:#6366f1;border-radius:50%;border:3px solid #0f0f1a;z-index:1;"></div>
+            <div style="position:absolute;left:7px;top:22px;bottom:0;width:2px;background:#1e293b;"></div>
+            <div style="background:#1a1a2e;border:1px solid #2a2a4a;border-radius:12px;padding:20px;">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
+                    <span style="background:#6366f1;color:white;padding:3px 10px;border-radius:6px;font-size:13px;font-weight:600;">{release.version}</span>
+                    <h2 style="margin:0;font-size:20px;color:#e2e8f0;">{release.title}</h2>
+                    {status_badge}
+                    <span style="color:#64748b;font-size:12px;margin-left:auto;">{date_str}</span>
+                </div>
+                <p style="color:#94a3b8;font-size:14px;margin:8px 0 16px 0;">{release.summary}</p>
+                <div>{changes_html}</div>
+            </div>
+        </div>'''
+
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Changelog — AI Opportunity Index</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {{
+        theme: {{
+            extend: {{
+                colors: {{
+                    brand: {{ 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' }},
+                }}
+            }}
+        }}
+    }}
+</script>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0f0f1a; color: #e0e0e0; margin: 0; }}
+  .nav {{ position: fixed; top: 0; left: 0; right: 0; z-index: 50; background: rgba(15,15,26,0.85); backdrop-filter: blur(8px); border-bottom: 1px solid #1f1f3a; }}
+  .nav-inner {{ max-width: 1200px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }}
+  .nav-left {{ display: flex; align-items: center; gap: 12px; }}
+  .nav-logo {{ width: 30px; height: 30px; background: #6366f1; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }}
+  .nav-title {{ font-size: 15px; font-weight: 600; color: #e0e0e0; }}
+  .nav-links {{ display: flex; gap: 16px; }}
+  .nav-links a {{ color: #888; font-size: 13px; text-decoration: none; transition: color 0.15s; }}
+  .nav-links a:hover {{ color: #e0e0e0; }}
+  .nav-links a.active {{ color: #818cf8; }}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="nav-left">
+      <div class="nav-logo">AI</div>
+      <span class="nav-title">AI Opportunity Index</span>
+    </div>
+    <div class="nav-links">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/status">Pipeline Status</a>
+      <a href="/trading">Trading</a>
+      <a href="/changelog" class="active">Changelog</a>
+      <a href="/internals">Internals</a>
+    </div>
+  </div>
+</nav>
+
+<div style="max-width:900px;margin:0 auto;padding:80px 24px 48px 24px;">
+  <h1 style="color:#818cf8;margin-bottom:4px;font-size:28px;">Changelog</h1>
+  <p style="color:#64748b;margin-bottom:32px;font-size:14px;">Release history and system changes</p>
+
+  <div style="position:relative;">
+    {releases_html}
+  </div>
+</div>
+</body>
+</html>'''
+
+    return Response(content=html, media_type="text/html")
+
+
+# ── Internals Page ────────────────────────────────────────────────────────
+
+
+@get("/internals")
+async def internals_page() -> Any:
+    """System internals dashboard showing health, architecture, config, and activity."""
+    from litestar.response import Response
+    import json as _json
+    from ai_opportunity_index.storage.models import (
+        CompanyModel,
+        CompanyScoreModel,
+        EvidenceModel,
+        PipelineRunModel,
+    )
+    from ai_opportunity_index.config import (
+        OPPORTUNITY_WEIGHTS,
+        CAPTURE_WEIGHTS,
+        ROI_WEIGHTS,
+        QUADRANT_OPP_THRESHOLD,
+        QUADRANT_REAL_THRESHOLD,
+        LLM_MODEL,
+        LLM_EXTRACTION_MODEL,
+        LLM_ESTIMATION_MODEL,
+        CACHE_POLICIES,
+        SEC_RATE_LIMIT_SECONDS,
+        YF_RATE_LIMIT_SECONDS,
+        GITHUB_RATE_LIMIT_SECONDS,
+        DATABASE_URL,
+        DATA_DIR,
+    )
+
+    # Gather data
+    db_status = "Connected"
+    total_companies = 0
+    total_evidence = 0
+    total_scores = 0
+    last_run_time = None
+    last_run_status = None
+    recent_runs = []
+
+    session = get_session()
+    try:
+        from sqlalchemy import func
+        total_companies = session.query(func.count(CompanyModel.id)).scalar() or 0
+        total_evidence = session.query(func.count(EvidenceModel.id)).scalar() or 0
+        total_scores = session.query(func.count(CompanyScoreModel.id)).scalar() or 0
+
+        last_run = session.query(PipelineRunModel).order_by(
+            PipelineRunModel.started_at.desc()
+        ).first()
+        if last_run:
+            last_run_time = last_run.started_at.isoformat() if last_run.started_at else "Unknown"
+            last_run_status = last_run.status if hasattr(last_run, "status") else "unknown"
+
+        runs = session.query(PipelineRunModel).order_by(
+            PipelineRunModel.started_at.desc()
+        ).limit(20).all()
+        for r in runs:
+            recent_runs.append({
+                "started": r.started_at.strftime("%Y-%m-%d %H:%M") if r.started_at else "?",
+                "status": r.status if hasattr(r, "status") else "unknown",
+                "stage": r.task if hasattr(r, "task") else "?",
+            })
+    except Exception as e:
+        db_status = f"Error: {e}"
+    finally:
+        session.close()
+
+    # Cost summary
+    cost_summary = {}
+    cost_path = DATA_DIR / "cost_summary.json"
+    if cost_path.exists():
+        try:
+            raw = _json.loads(cost_path.read_text())
+            if isinstance(raw, list) and raw:
+                cost_summary = raw[-1]
+            elif isinstance(raw, dict):
+                cost_summary = raw
+        except Exception:
+            pass
+
+    # Mask DB password
+    db_display = DATABASE_URL
+    if "@" in db_display:
+        parts = db_display.split("@")
+        db_display = "***@" + parts[-1]
+
+    # Build config HTML
+    weights_html = ""
+    for k, v in OPPORTUNITY_WEIGHTS.items():
+        weights_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#94a3b8;font-size:13px;">{k}</span><span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{v}</span></div>'
+
+    capture_html = ""
+    for k, v in CAPTURE_WEIGHTS.items():
+        capture_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#94a3b8;font-size:13px;">{k}</span><span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{v}</span></div>'
+
+    cache_html = ""
+    for stage, policy in CACHE_POLICIES.items():
+        ttl = f"{policy.ttl_days}d" if policy.ttl_days else "permanent"
+        cache_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#94a3b8;font-size:13px;">{stage}</span><span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{ttl} / {policy.cache_version}</span></div>'
+
+    # Cost tracking
+    cost_html = ""
+    if cost_summary:
+        total_cost = cost_summary.get("total_cost", 0)
+        cost_html = f'<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="color:#94a3b8;">Total LLM Cost</span><span style="color:#22c55e;font-family:monospace;">${total_cost:.4f}</span></div>'
+        for model, amount in cost_summary.get("by_model", {}).items():
+            cost_html += f'<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;"><span style="color:#94a3b8;font-size:12px;">{model}</span><span style="color:#e2e8f0;font-size:12px;font-family:monospace;">${amount:.4f}</span></div>'
+    else:
+        cost_html = '<p style="color:#64748b;font-size:13px;">No cost data available</p>'
+
+    # Recent runs
+    runs_html = ""
+    if recent_runs:
+        for run in recent_runs:
+            status_color = "#22c55e" if run["status"] in ("completed", "success") else "#f59e0b" if run["status"] == "running" else "#ef4444" if run["status"] == "failed" else "#64748b"
+            runs_html += f'''
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #1e293b;">
+                <span style="width:8px;height:8px;border-radius:50%;background:{status_color};flex-shrink:0;"></span>
+                <span style="color:#94a3b8;font-size:12px;min-width:120px;">{run["started"]}</span>
+                <span style="color:#e2e8f0;font-size:12px;">{run["stage"]}</span>
+                <span style="color:{status_color};font-size:11px;margin-left:auto;">{run["status"]}</span>
+            </div>'''
+    else:
+        runs_html = '<p style="color:#64748b;font-size:13px;">No pipeline runs recorded</p>'
+
+    db_color = "#22c55e" if db_status == "Connected" else "#ef4444"
+
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>System Internals — AI Opportunity Index</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+    tailwind.config = {{
+        theme: {{
+            extend: {{
+                colors: {{
+                    brand: {{ 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 800: '#3730a3', 900: '#312e81' }},
+                }}
+            }}
+        }}
+    }}
+</script>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0f0f1a; color: #e0e0e0; margin: 0; }}
+  .nav {{ position: fixed; top: 0; left: 0; right: 0; z-index: 50; background: rgba(15,15,26,0.85); backdrop-filter: blur(8px); border-bottom: 1px solid #1f1f3a; }}
+  .nav-inner {{ max-width: 1200px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }}
+  .nav-left {{ display: flex; align-items: center; gap: 12px; }}
+  .nav-logo {{ width: 30px; height: 30px; background: #6366f1; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }}
+  .nav-title {{ font-size: 15px; font-weight: 600; color: #e0e0e0; }}
+  .nav-links {{ display: flex; gap: 16px; }}
+  .nav-links a {{ color: #888; font-size: 13px; text-decoration: none; transition: color 0.15s; }}
+  .nav-links a:hover {{ color: #e0e0e0; }}
+  .nav-links a.active {{ color: #818cf8; }}
+  .panel {{ background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 12px; padding: 20px; }}
+  .panel-title {{ color: #818cf8; font-size: 15px; font-weight: 600; margin-bottom: 12px; }}
+  .stat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }}
+  .stat-card {{ background: #0f0f1a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; text-align: center; }}
+  .stat-value {{ font-size: 24px; font-weight: 700; color: #e2e8f0; }}
+  .stat-label {{ font-size: 11px; color: #64748b; margin-top: 2px; }}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="nav-left">
+      <div class="nav-logo">AI</div>
+      <span class="nav-title">AI Opportunity Index</span>
+    </div>
+    <div class="nav-links">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/status">Pipeline Status</a>
+      <a href="/trading">Trading</a>
+      <a href="/changelog">Changelog</a>
+      <a href="/internals" class="active">Internals</a>
+    </div>
+  </div>
+</nav>
+
+<div style="max-width:1200px;margin:0 auto;padding:80px 24px 48px 24px;">
+  <h1 style="color:#818cf8;margin-bottom:4px;font-size:28px;">System Internals</h1>
+  <p style="color:#64748b;margin-bottom:32px;font-size:14px;">Health, architecture, configuration, and activity</p>
+
+  <!-- System Health -->
+  <div class="panel" style="margin-bottom:20px;">
+    <div class="panel-title">System Health</div>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-value" style="color:{db_color};font-size:16px;">{db_status}</div>
+        <div class="stat-label">Database</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{total_companies:,}</div>
+        <div class="stat-label">Companies</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{total_evidence:,}</div>
+        <div class="stat-label">Evidence Records</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{total_scores:,}</div>
+        <div class="stat-label">Scores</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="font-size:14px;">{last_run_time or "Never"}</div>
+        <div class="stat-label">Last Pipeline Run</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="font-size:14px;color:{'#22c55e' if last_run_status in ('completed', 'success') else '#f59e0b' if last_run_status == 'running' else '#64748b'};">{last_run_status or "N/A"}</div>
+        <div class="stat-label">Last Run Status</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+
+  <!-- Architecture Overview -->
+  <div class="panel">
+    <div class="panel-title">Architecture Overview</div>
+    <div style="margin-bottom:16px;">
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:12px;">Pipeline DAG</p>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="background:#6366f1/20;border:1px solid #6366f130;border-radius:8px;padding:8px 14px;text-align:center;">
+          <div style="font-size:13px;font-weight:600;color:#a5b4fc;">Collect</div>
+          <div style="font-size:10px;color:#64748b;">SEC, Yahoo, News</div>
+        </div>
+        <span style="color:#4b5563;">&#8594;</span>
+        <div style="background:#06b6d4/20;border:1px solid #06b6d430;border-radius:8px;padding:8px 14px;text-align:center;">
+          <div style="font-size:13px;font-weight:600;color:#67e8f9;">Extract</div>
+          <div style="font-size:10px;color:#64748b;">NLP, LLM</div>
+        </div>
+        <span style="color:#4b5563;">&#8594;</span>
+        <div style="background:#22c55e/20;border:1px solid #22c55e30;border-radius:8px;padding:8px 14px;text-align:center;">
+          <div style="font-size:13px;font-weight:600;color:#86efac;">Value</div>
+          <div style="font-size:10px;color:#64748b;">Dollar Est.</div>
+        </div>
+        <span style="color:#4b5563;">&#8594;</span>
+        <div style="background:#f59e0b/20;border:1px solid #f59e0b30;border-radius:8px;padding:8px 14px;text-align:center;">
+          <div style="font-size:13px;font-weight:600;color:#fcd34d;">Score</div>
+          <div style="font-size:10px;color:#64748b;">Composite</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-bottom:12px;">
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:8px;">System Roles</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span style="background:#22c55e20;color:#86efac;padding:3px 10px;border-radius:6px;font-size:12px;">Editor</span>
+        <span style="background:#6366f120;color:#a5b4fc;padding:3px 10px;border-radius:6px;font-size:12px;">Researcher</span>
+        <span style="background:#f59e0b20;color:#fcd34d;padding:3px 10px;border-radius:6px;font-size:12px;">Reporter</span>
+      </div>
+    </div>
+    <div>
+      <p style="color:#94a3b8;font-size:13px;margin-bottom:8px;">Safety Subsystem</p>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:#22c55e;"></span>
+        <span style="color:#94a3b8;font-size:12px;">Active — evidence classification, discrepancy flagging</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fact Graph Statistics -->
+  <div class="panel">
+    <div class="panel-title">Fact Graph Statistics</div>
+    <p id="fg-status-msg" style="color:#64748b;font-size:12px;margin-bottom:12px;">Loading fact graph data...</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+        <div style="font-size:18px;font-weight:700;color:#e2e8f0;"><span id="fg-total-nodes">&mdash;</span></div>
+        <div style="font-size:10px;color:#64748b;">Total Nodes</div>
+      </div>
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+        <div style="font-size:18px;font-weight:700;color:#e2e8f0;"><span id="fg-total-edges">&mdash;</span></div>
+        <div style="font-size:10px;color:#64748b;">Total Edges</div>
+      </div>
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+        <div style="font-size:18px;font-weight:700;color:#f59e0b;"><span id="fg-low-confidence">&mdash;</span></div>
+        <div style="font-size:10px;color:#64748b;">Low Confidence</div>
+      </div>
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:10px;">
+        <div style="font-size:18px;font-weight:700;color:#ef4444;"><span id="fg-contradictions">&mdash;</span></div>
+        <div style="font-size:10px;color:#64748b;">Contradictions</div>
+      </div>
+    </div>
+
+    <!-- Completeness and Confidence bars -->
+    <div style="margin-top:12px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+        <span style="color:#94a3b8;font-size:12px;">Completeness</span>
+        <span id="fg-completeness-label" style="color:#e2e8f0;font-size:12px;font-family:monospace;">&mdash;</span>
+      </div>
+      <div style="background:#1e293b;border-radius:4px;height:8px;overflow:hidden;">
+        <div id="fg-completeness-bar" style="background:#6366f1;height:100%;width:0%;transition:width 0.5s;border-radius:4px;"></div>
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+        <span style="color:#94a3b8;font-size:12px;">High Confidence</span>
+        <span id="fg-highconf-label" style="color:#e2e8f0;font-size:12px;font-family:monospace;">&mdash;</span>
+      </div>
+      <div style="background:#1e293b;border-radius:4px;height:8px;overflow:hidden;">
+        <div id="fg-highconf-bar" style="background:#22c55e;height:100%;width:0%;transition:width 0.5s;border-radius:4px;"></div>
+      </div>
+    </div>
+
+    <!-- Additional metrics -->
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:100px;text-align:center;">
+        <div style="font-size:16px;font-weight:700;color:#22c55e;"><span id="fg-confirmations">&mdash;</span></div>
+        <div style="font-size:9px;color:#64748b;">Cross-source Confirmations</div>
+      </div>
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:100px;text-align:center;">
+        <div style="font-size:16px;font-weight:700;color:#a5b4fc;"><span id="fg-counterfactual">&mdash;</span></div>
+        <div style="font-size:9px;color:#64748b;">Counterfactual Branches</div>
+      </div>
+      <div style="background:#0f0f1a;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;flex:1;min-width:100px;text-align:center;">
+        <div style="font-size:16px;font-weight:700;color:#06b6d4;"><span id="fg-competitive">&mdash;</span></div>
+        <div style="font-size:9px;color:#64748b;">Competitive Edges</div>
+      </div>
+    </div>
+
+    <!-- Nodes by type breakdown -->
+    <div id="fg-nodes-by-type" style="margin-top:12px;display:none;">
+      <p style="color:#94a3b8;font-size:12px;margin-bottom:6px;">Nodes by Type</p>
+      <div id="fg-nodes-by-type-list" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+  </div>
+
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+
+  <!-- Configuration Inspector -->
+  <div class="panel">
+    <div class="panel-title">Configuration Inspector</div>
+
+    <p style="color:#94a3b8;font-size:12px;margin-bottom:6px;font-weight:600;">Opportunity Weights</p>
+    {weights_html}
+
+    <p style="color:#94a3b8;font-size:12px;margin:12px 0 6px 0;font-weight:600;">Capture Weights</p>
+    {capture_html}
+
+    <p style="color:#94a3b8;font-size:12px;margin:12px 0 6px 0;font-weight:600;">Quadrant Thresholds</p>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">Opportunity</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{QUADRANT_OPP_THRESHOLD}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">Realization</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{QUADRANT_REAL_THRESHOLD}</span>
+    </div>
+
+    <p style="color:#94a3b8;font-size:12px;margin:12px 0 6px 0;font-weight:600;">LLM Models</p>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">Primary</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{LLM_MODEL}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">Extraction</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{LLM_EXTRACTION_MODEL}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">Estimation</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{LLM_ESTIMATION_MODEL}</span>
+    </div>
+
+    <p style="color:#94a3b8;font-size:12px;margin:12px 0 6px 0;font-weight:600;">API Rate Limits</p>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">SEC EDGAR</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{SEC_RATE_LIMIT_SECONDS}s</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">Yahoo Finance</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{YF_RATE_LIMIT_SECONDS}s</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1e293b;">
+      <span style="color:#94a3b8;font-size:13px;">GitHub</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{GITHUB_RATE_LIMIT_SECONDS}s</span>
+    </div>
+  </div>
+
+  <!-- Right column: Cost + Cache + Activity -->
+  <div style="display:flex;flex-direction:column;gap:20px;">
+
+    <!-- LLM Cost Tracking -->
+    <div class="panel">
+      <div class="panel-title">LLM Cost Tracking</div>
+      {cost_html}
+    </div>
+
+    <!-- Cache Policies -->
+    <div class="panel">
+      <div class="panel-title">Cache Policies</div>
+      {cache_html}
+    </div>
+  </div>
+
+  </div>
+
+  <!-- Recent Activity Feed -->
+  <div class="panel" style="margin-bottom:20px;">
+    <div class="panel-title">Recent Activity Feed</div>
+    <p style="color:#64748b;font-size:12px;margin-bottom:8px;">Last 20 pipeline runs</p>
+    {runs_html}
+  </div>
+
+  <!-- Database -->
+  <div class="panel">
+    <div class="panel-title">Database</div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;">
+      <span style="color:#94a3b8;font-size:13px;">Connection</span>
+      <span style="color:#e2e8f0;font-size:13px;font-family:monospace;">{db_display}</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function() {{
+  fetch('/api/fact-graph/stats')
+    .then(r => r.json())
+    .then(data => {{
+      const s = data.stats || {{}};
+      const statusMsg = document.getElementById('fg-status-msg');
+
+      if (data.status === 'error') {{
+        statusMsg.textContent = 'Fact graph unavailable: ' + (data.error || 'unknown error');
+        statusMsg.style.color = '#f59e0b';
+        return;
+      }}
+
+      statusMsg.textContent = 'Live fact graph data';
+      statusMsg.style.color = '#22c55e';
+
+      // Basic counts
+      document.getElementById('fg-total-nodes').textContent = (s.total_nodes || 0).toLocaleString();
+      document.getElementById('fg-total-edges').textContent = (s.total_edges || 0).toLocaleString();
+      document.getElementById('fg-low-confidence').textContent = (s.low_confidence_values || 0).toLocaleString();
+      document.getElementById('fg-contradictions').textContent = (s.contradictions || 0).toLocaleString();
+
+      // Bars
+      const comp = s.completeness_pct || 0;
+      const hc = s.high_confidence_pct || 0;
+      document.getElementById('fg-completeness-bar').style.width = comp + '%';
+      document.getElementById('fg-completeness-label').textContent = comp + '%';
+      document.getElementById('fg-highconf-bar').style.width = hc + '%';
+      document.getElementById('fg-highconf-label').textContent = hc + '%';
+
+      // Additional metrics
+      document.getElementById('fg-confirmations').textContent = (s.cross_source_confirmations || 0).toLocaleString();
+      document.getElementById('fg-counterfactual').textContent = (s.counterfactual_branches || 0).toLocaleString();
+      document.getElementById('fg-competitive').textContent = (s.competitive_edges || 0).toLocaleString();
+
+      // Nodes by type
+      const nbt = s.nodes_by_type || {{}};
+      const keys = Object.keys(nbt);
+      if (keys.length > 0) {{
+        document.getElementById('fg-nodes-by-type').style.display = 'block';
+        const list = document.getElementById('fg-nodes-by-type-list');
+        keys.forEach(k => {{
+          const span = document.createElement('span');
+          span.style.cssText = 'background:#1e293b;color:#94a3b8;padding:2px 8px;border-radius:4px;font-size:11px;';
+          span.textContent = k + ': ' + nbt[k];
+          list.appendChild(span);
+        }});
+      }}
+    }})
+    .catch(err => {{
+      const statusMsg = document.getElementById('fg-status-msg');
+      statusMsg.textContent = 'Failed to load fact graph data';
+      statusMsg.style.color = '#ef4444';
+    }});
+}})();
+</script>
+</body>
+</html>'''
+
+    return Response(content=html, media_type="text/html")
+
+
+# ── Changelog & Internals API ─────────────────────────────────────────────
+
+
+@get("/api/changelog")
+async def api_changelog() -> list[dict]:
+    """Return changelog as JSON."""
+    from ai_opportunity_index.changelog import load_changelog
+    releases = load_changelog()
+    return [r.model_dump(mode="json") for r in releases]
+
+
+@post("/api/changelog")
+async def api_changelog_post(data: dict) -> dict:
+    """Add a new release entry (for CI/CD to call)."""
+    from ai_opportunity_index.changelog import Release, add_release
+    try:
+        release = Release(**data)
+        add_release(release)
+        return {"status": "ok", "version": release.version}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+
+@get("/api/internals")
+async def api_internals() -> dict:
+    """Return system health and configuration as JSON."""
+    import json as _json
+    from ai_opportunity_index.storage.models import (
+        CompanyModel,
+        CompanyScoreModel,
+        EvidenceModel,
+        PipelineRunModel,
+    )
+    from ai_opportunity_index.config import (
+        OPPORTUNITY_WEIGHTS,
+        CAPTURE_WEIGHTS,
+        ROI_WEIGHTS,
+        QUADRANT_OPP_THRESHOLD,
+        QUADRANT_REAL_THRESHOLD,
+        LLM_MODEL,
+        LLM_EXTRACTION_MODEL,
+        LLM_ESTIMATION_MODEL,
+        CACHE_POLICIES,
+        SEC_RATE_LIMIT_SECONDS,
+        YF_RATE_LIMIT_SECONDS,
+        GITHUB_RATE_LIMIT_SECONDS,
+        DATA_DIR,
+    )
+
+    health = {"db_status": "connected", "total_companies": 0, "total_evidence": 0, "total_scores": 0, "last_run_time": None, "last_run_status": None}
+
+    session = get_session()
+    try:
+        from sqlalchemy import func
+        health["total_companies"] = session.query(func.count(CompanyModel.id)).scalar() or 0
+        health["total_evidence"] = session.query(func.count(EvidenceModel.id)).scalar() or 0
+        health["total_scores"] = session.query(func.count(CompanyScoreModel.id)).scalar() or 0
+
+        last_run = session.query(PipelineRunModel).order_by(PipelineRunModel.started_at.desc()).first()
+        if last_run:
+            health["last_run_time"] = last_run.started_at.isoformat() if last_run.started_at else None
+            health["last_run_status"] = last_run.status if hasattr(last_run, "status") else "unknown"
+    except Exception as e:
+        health["db_status"] = f"error: {e}"
+    finally:
+        session.close()
+
+    cost_summary = {}
+    cost_path = DATA_DIR / "cost_summary.json"
+    if cost_path.exists():
+        try:
+            cost_summary = _json.loads(cost_path.read_text())
+        except Exception:
+            pass
+
+    config = {
+        "opportunity_weights": OPPORTUNITY_WEIGHTS,
+        "capture_weights": CAPTURE_WEIGHTS,
+        "roi_weights": ROI_WEIGHTS,
+        "quadrant_thresholds": {"opportunity": QUADRANT_OPP_THRESHOLD, "realization": QUADRANT_REAL_THRESHOLD},
+        "llm_models": {"primary": LLM_MODEL, "extraction": LLM_EXTRACTION_MODEL, "estimation": LLM_ESTIMATION_MODEL},
+        "rate_limits": {"sec_edgar": SEC_RATE_LIMIT_SECONDS, "yahoo_finance": YF_RATE_LIMIT_SECONDS, "github": GITHUB_RATE_LIMIT_SECONDS},
+        "cache_policies": {k: {"ttl_days": v.ttl_days, "cache_version": v.cache_version, "check_type": v.check_type} for k, v in CACHE_POLICIES.items()},
+    }
+
+    return {"health": health, "config": config, "cost_summary": cost_summary}
+
+
+@get("/api/fact-graph/stats")
+async def api_fact_graph_stats() -> dict:
+    """Fact graph statistics — nodes, edges, inference results."""
+    try:
+        from ai_opportunity_index.fact_graph.bridge import build_graph_from_db
+
+        session = get_session()
+        try:
+            graph = build_graph_from_db(session)
+            stats = graph.stats()
+
+            # Add some derived metrics
+            total_attrs = stats["total_attributes"]
+            missing = stats["missing_values"]
+            low_conf = stats["low_confidence_values"]
+
+            stats["completeness_pct"] = round(
+                ((total_attrs - missing) / total_attrs * 100) if total_attrs > 0 else 0, 1
+            )
+            stats["high_confidence_pct"] = round(
+                ((total_attrs - missing - low_conf) / total_attrs * 100) if total_attrs > 0 else 0, 1
+            )
+            stats["cross_source_confirmations"] = sum(
+                1 for e in graph.edges.values() if e.relation.value == "confirms"
+            )
+            stats["contradictions"] = sum(
+                1 for e in graph.edges.values() if e.relation.value == "contradicts"
+            )
+            stats["competitive_edges"] = sum(
+                1 for e in graph.edges.values() if e.relation.value == "competes_with"
+            )
+
+            return {"status": "ok", "stats": stats}
+        finally:
+            session.close()
+    except Exception as e:
+        return {"status": "error", "error": str(e), "stats": {
+            "total_nodes": 0, "total_edges": 0, "total_attributes": 0,
+            "missing_values": 0, "low_confidence_values": 0,
+            "counterfactual_branches": 0, "completeness_pct": 0,
+            "high_confidence_pct": 0, "nodes_by_type": {},
+        }}
+
+
+# ── Trading Signals ──────────────────────────────────────────────────────
+
+
+@get("/api/trading/signals")
+async def api_trading_signals() -> dict:
+    """Generate trade signals and return as JSON."""
+    try:
+        from ai_opportunity_index.trading.signal_generator import TradeSignalGenerator
+        from ai_opportunity_index.trading.models import Portfolio
+
+        session = get_session()
+        try:
+            generator = TradeSignalGenerator(session=session)
+            result = generator.generate_signals()
+            return result.model_dump(mode="json")
+        finally:
+            session.close()
+    except ImportError as e:
+        return {"error": f"Trading module not available: {e}", "signals": []}
+    except Exception as e:
+        logger.exception("Failed to generate trading signals")
+        return {"error": str(e), "signals": []}
+
+
+@get("/api/trading/portfolios")
+async def api_trading_portfolios() -> dict:
+    """List all saved portfolios."""
+    try:
+        from ai_opportunity_index.trading.portfolio_manager import list_portfolios
+
+        portfolios = list_portfolios()
+        return {"portfolios": [p.model_dump(mode="json") for p in portfolios]}
+    except ImportError as e:
+        return {"error": f"Trading module not available: {e}", "portfolios": []}
+    except Exception as e:
+        logger.exception("Failed to list portfolios")
+        return {"error": str(e), "portfolios": []}
+
+
+@get("/trading")
+async def trading_page() -> Any:
+    """Trading signals dry-run page with full rationale chains."""
+    from litestar.response import Response
+    html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trading Signals &mdash; AI Opportunity Index</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0f0f1a; color: #e0e0e0; padding: 0; margin: 0; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 80px 24px 48px 24px; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 50; background: rgba(15,15,26,0.85); backdrop-filter: blur(8px); border-bottom: 1px solid #1f1f3a; }
+  .nav-inner { max-width: 1200px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .nav-left { display: flex; align-items: center; gap: 12px; }
+  .nav-logo { width: 30px; height: 30px; background: #6366f1; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }
+  .nav-title { font-size: 15px; font-weight: 600; color: #e0e0e0; }
+  .nav-links { display: flex; gap: 16px; }
+  .nav-links a { color: #888; font-size: 13px; text-decoration: none; transition: color 0.15s; }
+  .nav-links a:hover { color: #e0e0e0; }
+  .nav-links a.active { color: #818cf8; }
+
+  h1 { color: #818cf8; margin-bottom: 4px; font-size: 28px; }
+  .subtitle { color: #64748b; margin-bottom: 24px; font-size: 14px; }
+
+  .controls { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  .gen-btn { background: #4f46e5; color: #fff; border: none; padding: 8px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+  .gen-btn:hover { background: #6366f1; }
+  .gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .auto-label { color: #888; font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .last-updated { color: #64748b; font-size: 12px; margin-left: auto; }
+
+  .summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .summary-card { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 10px; padding: 16px; text-align: center; }
+  .summary-value { font-size: 28px; font-weight: 700; color: #e2e8f0; }
+  .summary-label { font-size: 11px; color: #64748b; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .signal-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .signal-table th { text-align: left; padding: 10px 8px; color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #2a2a4a; }
+  .signal-table td { padding: 10px 8px; border-bottom: 1px solid #1e293b; vertical-align: middle; }
+  .signal-table tr { cursor: pointer; transition: background 0.1s; }
+  .signal-table tr:hover { background: rgba(99,102,241,0.05); }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+  .badge-buy { background: rgba(34,197,94,0.15); color: #22c55e; }
+  .badge-sell { background: rgba(239,68,68,0.15); color: #ef4444; }
+  .badge-hold { background: rgba(100,116,139,0.15); color: #94a3b8; }
+  .badge-increase { background: rgba(59,130,246,0.15); color: #3b82f6; }
+  .badge-decrease { background: rgba(249,115,22,0.15); color: #f97316; }
+
+  .badge-strong { background: rgba(168,85,247,0.2); color: #a855f7; }
+  .badge-moderate { border: 1px solid rgba(168,85,247,0.3); color: #a855f7; background: transparent; }
+  .badge-weak { color: #64748b; background: transparent; }
+
+  .score-bar { display: inline-flex; align-items: center; gap: 6px; }
+  .score-track { width: 50px; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
+  .score-fill { height: 100%; border-radius: 3px; }
+  .score-fill-opp { background: #6366f1; }
+  .score-fill-real { background: #22d3ee; }
+
+  .ticker-link { color: #818cf8; text-decoration: none; font-weight: 600; }
+  .ticker-link:hover { text-decoration: underline; }
+
+  .rationale-text { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #94a3b8; font-size: 12px; }
+  .risk-count { color: #f97316; font-weight: 600; }
+
+  .expanded-row { display: none; }
+  .expanded-row.open { display: table-row; }
+  .expanded-cell { padding: 16px 8px 24px 8px; background: #12122a; }
+  .expanded-inner { max-width: 800px; }
+  .expanded-summary { color: #e2e8f0; font-size: 14px; margin-bottom: 16px; line-height: 1.5; }
+
+  .rationale-tree { margin-bottom: 16px; }
+  .rationale-node { padding: 8px 12px; border-left: 3px solid #333; margin-left: 0; margin-bottom: 4px; border-radius: 0 6px 6px 0; background: rgba(255,255,255,0.02); }
+  .rationale-node.level-trade { border-left-color: #a855f7; background: rgba(168,85,247,0.06); }
+  .rationale-node.level-insight { border-left-color: #3b82f6; background: rgba(59,130,246,0.06); margin-left: 20px; }
+  .rationale-node.level-evidence { border-left-color: #22c55e; background: rgba(34,197,94,0.06); margin-left: 40px; }
+  .rationale-node.level-source { border-left-color: #f59e0b; background: rgba(245,158,11,0.06); margin-left: 60px; }
+  .rationale-level { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 2px; }
+  .rationale-level-trade { color: #a855f7; }
+  .rationale-level-insight { color: #3b82f6; }
+  .rationale-level-evidence { color: #22c55e; }
+  .rationale-level-source { color: #f59e0b; }
+  .rationale-desc { font-size: 13px; color: #cbd5e1; }
+  .rationale-meta { font-size: 11px; color: #64748b; margin-top: 2px; }
+  .rationale-meta a { color: #818cf8; text-decoration: none; }
+  .rationale-meta a:hover { text-decoration: underline; }
+
+  .risk-list { list-style: none; padding: 0; margin: 0 0 12px 0; }
+  .risk-list li { padding: 4px 0; font-size: 13px; color: #f97316; }
+  .risk-list li::before { content: "\\26A0 "; }
+  .flag-list { display: flex; gap: 6px; flex-wrap: wrap; }
+  .flag-tag { background: rgba(245,158,11,0.1); color: #f59e0b; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+
+  .portfolio-section { margin-top: 32px; }
+  .portfolio-panel { background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 10px; padding: 20px; }
+  .portfolio-title { color: #818cf8; font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+  .portfolio-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .portfolio-stat { text-align: center; }
+  .portfolio-stat-value { font-size: 20px; font-weight: 700; color: #e2e8f0; }
+  .portfolio-stat-label { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  .error-msg { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px 16px; color: #ef4444; font-size: 13px; margin-bottom: 16px; display: none; }
+  .loading { color: #64748b; font-size: 14px; text-align: center; padding: 32px; }
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-inner">
+    <div class="nav-left">
+      <div class="nav-logo">AI</div>
+      <span class="nav-title">AI Opportunity Index</span>
+    </div>
+    <div class="nav-links">
+      <a href="/dashboard">Dashboard</a>
+      <a href="/status">Pipeline Status</a>
+      <a href="/trading" class="active">Trading</a>
+      <a href="/changelog">Changelog</a>
+      <a href="/internals">Internals</a>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <h1>Trading Signals &mdash; Dry Run</h1>
+  <p class="subtitle">Paper trading signals with full rationale chains. Every trade decision is traceable back to source evidence.</p>
+
+  <div class="controls">
+    <button class="gen-btn" id="gen-btn" onclick="generateSignals()">Generate Signals</button>
+    <label class="auto-label"><input type="checkbox" id="auto-toggle"> Auto-refresh 30s</label>
+    <span class="last-updated" id="updated"></span>
+  </div>
+
+  <div class="error-msg" id="error-msg"></div>
+
+  <div class="summary-row" id="summary-row">
+    <div class="summary-card"><div class="summary-value" id="sum-total">--</div><div class="summary-label">Total Signals</div></div>
+    <div class="summary-card"><div class="summary-value" id="sum-buys" style="color:#22c55e">--</div><div class="summary-label">Buys</div></div>
+    <div class="summary-card"><div class="summary-value" id="sum-sells" style="color:#ef4444">--</div><div class="summary-label">Sells</div></div>
+    <div class="summary-card"><div class="summary-value" id="sum-holds" style="color:#94a3b8">--</div><div class="summary-label">Holds</div></div>
+    <div class="summary-card"><div class="summary-value" id="sum-turnover">--</div><div class="summary-label">Turnover %</div></div>
+  </div>
+
+  <table class="signal-table">
+    <thead>
+      <tr>
+        <th>Action</th>
+        <th>Strength</th>
+        <th>Ticker</th>
+        <th>Company</th>
+        <th>Opportunity</th>
+        <th>Realization</th>
+        <th>Target Wt%</th>
+        <th>Wt Change%</th>
+        <th>Rationale</th>
+        <th>Risks</th>
+      </tr>
+    </thead>
+    <tbody id="signal-body">
+      <tr><td colspan="10" class="loading">Click &ldquo;Generate Signals&rdquo; to start</td></tr>
+    </tbody>
+  </table>
+
+  <div class="portfolio-section" id="portfolio-section" style="display:none;">
+    <div class="portfolio-panel">
+      <div class="portfolio-title">Portfolio Summary</div>
+      <div class="portfolio-stats" id="portfolio-stats"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let autoTimer = null;
+let currentData = null;
+
+function generateSignals() {
+  const btn = document.getElementById('gen-btn');
+  const errEl = document.getElementById('error-msg');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  errEl.style.display = 'none';
+
+  fetch('/api/trading/signals')
+    .then(r => r.json())
+    .then(data => {
+      btn.disabled = false;
+      btn.textContent = 'Generate Signals';
+      if (data.error) {
+        errEl.textContent = data.error;
+        errEl.style.display = 'block';
+        return;
+      }
+      currentData = data;
+      renderSummary(data);
+      renderSignals(data.signals || []);
+      renderPortfolio(data);
+      document.getElementById('updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    })
+    .catch(err => {
+      btn.disabled = false;
+      btn.textContent = 'Generate Signals';
+      errEl.textContent = 'Request failed: ' + err.message;
+      errEl.style.display = 'block';
+    });
+}
+
+function renderSummary(data) {
+  document.getElementById('sum-total').textContent = (data.signals || []).length;
+  document.getElementById('sum-buys').textContent = data.total_buys || 0;
+  document.getElementById('sum-sells').textContent = data.total_sells || 0;
+  document.getElementById('sum-holds').textContent = data.total_holds || 0;
+  document.getElementById('sum-turnover').textContent = ((data.turnover || 0) * 100).toFixed(1) + '%';
+}
+
+function renderSignals(signals) {
+  const tbody = document.getElementById('signal-body');
+  if (!signals.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="loading">No signals generated</td></tr>';
+    return;
+  }
+
+  // Sort: BUY first, then SELL, then others
+  const order = {'buy': 0, 'increase': 1, 'sell': 2, 'decrease': 3, 'hold': 4};
+  signals.sort((a, b) => (order[a.action] || 5) - (order[b.action] || 5));
+
+  let html = '';
+  signals.forEach((s, i) => {
+    const actionClass = 'badge-' + s.action;
+    const strengthClass = 'badge-' + s.strength;
+    const oppPct = ((s.opportunity_score || 0) * 100).toFixed(0);
+    const realPct = ((s.realization_score || 0) * 100).toFixed(0);
+    const targetWt = ((s.target_weight || 0) * 100).toFixed(2);
+    const wtChange = ((s.weight_change || 0) * 100).toFixed(2);
+    const wtChangeColor = s.weight_change > 0 ? '#22c55e' : s.weight_change < 0 ? '#ef4444' : '#94a3b8';
+    const rationale = escapeHtml(s.rationale_summary || '').substring(0, 60);
+    const riskCount = (s.risk_factors || []).length;
+
+    html += '<tr onclick="toggleExpand(' + i + ')">';
+    html += '<td><span class="badge ' + actionClass + '">' + s.action.toUpperCase() + '</span></td>';
+    html += '<td><span class="badge ' + strengthClass + '">' + s.strength.toUpperCase() + '</span></td>';
+    html += '<td><a href="/company/' + encodeURIComponent(s.ticker) + '" class="ticker-link" onclick="event.stopPropagation()">' + escapeHtml(s.ticker) + '</a></td>';
+    html += '<td>' + escapeHtml(s.company_name || '') + '</td>';
+    html += '<td><span class="score-bar"><span class="score-track"><span class="score-fill score-fill-opp" style="width:' + oppPct + '%"></span></span>' + oppPct + '%</span></td>';
+    html += '<td><span class="score-bar"><span class="score-track"><span class="score-fill score-fill-real" style="width:' + realPct + '%"></span></span>' + realPct + '%</span></td>';
+    html += '<td>' + targetWt + '%</td>';
+    html += '<td style="color:' + wtChangeColor + '">' + (s.weight_change > 0 ? '+' : '') + wtChange + '%</td>';
+    html += '<td><span class="rationale-text">' + rationale + '</span></td>';
+    html += '<td>' + (riskCount > 0 ? '<span class="risk-count">' + riskCount + '</span>' : '0') + '</td>';
+    html += '</tr>';
+
+    // Expanded row
+    html += '<tr class="expanded-row" id="expand-' + i + '"><td colspan="10" class="expanded-cell"><div class="expanded-inner">';
+    html += '<div class="expanded-summary">' + escapeHtml(s.rationale_summary || '') + '</div>';
+
+    // Rationale tree
+    if (s.rationale) {
+      html += '<div class="rationale-tree">';
+      html += renderNode(s.rationale);
+      html += '</div>';
+    }
+
+    // Risk factors
+    if (s.risk_factors && s.risk_factors.length) {
+      html += '<ul class="risk-list">';
+      s.risk_factors.forEach(r => { html += '<li>' + escapeHtml(r) + '</li>'; });
+      html += '</ul>';
+    }
+
+    // Flags
+    if (s.flags && s.flags.length) {
+      html += '<div class="flag-list">';
+      s.flags.forEach(f => { html += '<span class="flag-tag">' + escapeHtml(f) + '</span>'; });
+      html += '</div>';
+    }
+
+    html += '</div></td></tr>';
+  });
+
+  tbody.innerHTML = html;
+}
+
+function renderNode(node) {
+  if (!node) return '';
+  let cls = 'rationale-node level-' + node.level;
+  let levelCls = 'rationale-level rationale-level-' + node.level;
+  let html = '<div class="' + cls + '">';
+  html += '<div class="' + levelCls + '">' + node.level.toUpperCase() + '</div>';
+  html += '<div class="rationale-desc">' + escapeHtml(node.description) + '</div>';
+
+  let meta = '';
+  if (node.source_url) meta += '<a href="' + escapeHtml(node.source_url) + '" target="_blank">Source</a> ';
+  if (node.source_author) meta += node.source_author + ' ';
+  if (node.source_date) meta += node.source_date + ' ';
+  if (node.confidence != null) meta += '(conf: ' + (node.confidence * 100).toFixed(0) + '%)';
+  if (meta) html += '<div class="rationale-meta">' + meta + '</div>';
+
+  html += '</div>';
+
+  if (node.children && node.children.length) {
+    node.children.forEach(child => { html += renderNode(child); });
+  }
+  return html;
+}
+
+function toggleExpand(i) {
+  const row = document.getElementById('expand-' + i);
+  if (row) row.classList.toggle('open');
+}
+
+function renderPortfolio(data) {
+  const section = document.getElementById('portfolio-section');
+  const statsEl = document.getElementById('portfolio-stats');
+  const signals = data.signals || [];
+  if (!signals.length) { section.style.display = 'none'; return; }
+
+  const positions = {};
+  signals.forEach(s => {
+    if (s.target_weight > 0) positions[s.ticker] = s.target_weight;
+  });
+  const posCount = Object.keys(positions).length;
+  const totalWeight = Object.values(positions).reduce((a, b) => a + b, 0);
+  const cashWeight = Math.max(0, 1 - totalWeight);
+
+  statsEl.innerHTML =
+    '<div class="portfolio-stat"><div class="portfolio-stat-value">' + posCount + '</div><div class="portfolio-stat-label">Positions</div></div>' +
+    '<div class="portfolio-stat"><div class="portfolio-stat-value">' + (totalWeight * 100).toFixed(1) + '%</div><div class="portfolio-stat-label">Invested</div></div>' +
+    '<div class="portfolio-stat"><div class="portfolio-stat-value">' + (cashWeight * 100).toFixed(1) + '%</div><div class="portfolio-stat-label">Cash</div></div>';
+  section.style.display = 'block';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Auto-refresh
+document.getElementById('auto-toggle').addEventListener('change', function() {
+  if (this.checked) {
+    generateSignals();
+    autoTimer = setInterval(generateSignals, 30000);
+  } else {
+    if (autoTimer) clearInterval(autoTimer);
+    autoTimer = null;
+  }
+});
+</script>
+</body>
+</html>"""
+    return Response(content=html, media_type="text/html")
+
+
 # ── Application Lifecycle ─────────────────────────────────────────────────
 
 
@@ -2523,6 +3739,8 @@ app = Litestar(
         serve_css,
         serve_data,
         login,
+        token_login,
+        auth_me,
         create_checkout_session,
         checkout_success,
         stripe_webhook,
@@ -2539,10 +3757,56 @@ app = Litestar(
         api_company_peers,
         api_company_valuations,
         PipelineAPIController,
+        GraphQLController,
         api_company_links,
         api_update_company_links,
         api_request_refresh,
         api_portfolio,
+        changelog_page,
+        internals_page,
+        api_changelog,
+        api_changelog_post,
+        api_internals,
+        api_fact_graph_stats,
+        api_trading_signals,
+        api_trading_portfolios,
+        trading_page,
+        get_agents_status,
+        post_bulletin_action,
+        dismiss_resolved_items,
+        get_agent_teams,
+        get_agent_team_detail,
+        get_agent_channels,
+        get_channel_messages,
+        post_channel_message,
+        get_agent_plans,
+        get_agent_plan_detail,
+        post_plan_comment,
+        update_plan_status,
+        get_agent_projects,
+        get_agent_project_detail,
+        get_team_metrics,
+        get_all_teams_metrics,
+        post_project_review,
+        api_ratings_create,
+        api_ratings_list,
+        api_ratings_recent,
+        api_ratings_summary,
+        sse_agents,
+        sse_pipeline,
+        sse_ratings,
+        sse_scores,
+        sse_agent_chat,
+        dashboard_stats,
+        api_passages,
+        api_chat_create,
+        api_chat_list,
+        api_chat_toggle_addressed,
     ],
     on_startup=[on_startup],
+    cors_config=CORSConfig(
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+    ),
 )

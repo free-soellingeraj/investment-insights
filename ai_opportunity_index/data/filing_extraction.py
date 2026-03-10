@@ -15,7 +15,8 @@ from datetime import datetime
 from pathlib import Path
 
 from ai_opportunity_index.cache import cache_is_fresh, stamp_cache
-from ai_opportunity_index.config import LLM_EXTRACTION_MODEL, RAW_DIR, get_google_provider
+from ai_opportunity_index.config import RAW_DIR
+from ai_opportunity_index.llm_backend import run_agent_with_retry as _run_with_retry
 from ai_opportunity_index.prompts.loader import load_prompt
 
 logger = logging.getLogger(__name__)
@@ -49,14 +50,11 @@ def _strip_xbrl_tags(text: str) -> str:
 
 
 def _get_agent():
-    """Lazy-init pydantic_ai agent for filing extraction."""
-    from pydantic_ai import Agent
-    from pydantic_ai.models.google import GoogleModel
-
+    """Lazy-init LLM agent for filing extraction."""
+    from ai_opportunity_index.llm_backend import get_agent
     from ai_opportunity_index.scoring.pipeline.llm_extractors import ExtractedPassages
 
-    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-    return Agent(model, output_type=ExtractedPassages)
+    return get_agent(output_type=ExtractedPassages)
 
 
 def _per_filing_cache_path(ticker: str, filename: str) -> Path:
@@ -80,6 +78,20 @@ def _write_per_filing_cache(ticker: str, filename: str, data: dict) -> None:
     path = _per_filing_cache_path(ticker, filename)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
+
+
+def _load_filing_metadata(ticker: str) -> dict:
+    """Load filing metadata sidecar with CIK/accession/URL info.
+
+    Returns dict: filename -> {cik, accession_number, url, ...}.
+    """
+    metadata_path = RAW_DIR / "filings" / ticker.upper() / "_metadata.json"
+    if not metadata_path.exists():
+        return {}
+    try:
+        return json.loads(metadata_path.read_text())
+    except Exception:
+        return {}
 
 
 async def extract_filings_for_company(
@@ -106,6 +118,7 @@ async def extract_filings_for_company(
         return {"ticker": ticker, "extracted_at": datetime.utcnow().isoformat(), "filings": []}
 
     agent = None  # lazy-init only if we need LLM calls
+    filing_metadata = _load_filing_metadata(ticker)
 
     async def _extract_one(filing_path) -> dict | None:
         nonlocal agent
@@ -142,9 +155,9 @@ async def extract_filings_for_company(
             )
             if semaphore:
                 async with semaphore:
-                    result = await agent.run(prompt)
+                    result = await _run_with_retry(agent, prompt)
             else:
-                result = await agent.run(prompt)
+                result = await _run_with_retry(agent, prompt)
 
             usage = result.usage()
             logger.info(
@@ -172,6 +185,9 @@ async def extract_filings_for_company(
             if date_match:
                 filing_date = date_match.group(1)
 
+            # Include SEC EDGAR metadata for URL provenance
+            meta = filing_metadata.get(filing_path.name, {})
+
             filing_result = {
                 "filename": filing_path.name,
                 "filing_date": filing_date,
@@ -179,6 +195,9 @@ async def extract_filings_for_company(
                 "extracted_at": datetime.utcnow().isoformat(),
                 "input_tokens": usage.input_tokens or 0,
                 "output_tokens": usage.output_tokens or 0,
+                "url": meta.get("url", ""),
+                "cik": meta.get("cik"),
+                "accession_number": meta.get("accession_number", ""),
             }
 
             # Cache per-filing result permanently (only if we got passages,

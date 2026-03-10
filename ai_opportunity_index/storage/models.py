@@ -254,6 +254,8 @@ class CompanyScoreModel(Base):
     capture_probability: Mapped[float | None] = mapped_column(Float)
     opportunity_usd: Mapped[float | None] = mapped_column(Float)
     evidence_dollars: Mapped[float | None] = mapped_column(Float)
+    evidence_group_ids: Mapped[list[int] | None] = mapped_column(ARRAY(Integer), nullable=True)
+    valuation_ids: Mapped[list[int] | None] = mapped_column(ARRAY(Integer), nullable=True)
     flags: Mapped[list] = mapped_column(ARRAY(String), default=list)
     data_as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     scored_at: Mapped[datetime] = mapped_column(
@@ -616,6 +618,47 @@ class ValuationDiscrepancyModel(Base):
     )
 
 
+class InvestmentProjectModel(Base):
+    __tablename__ = "investment_projects"
+    __table_args__ = (
+        Index("ix_ip_company", "company_id"),
+        Index("ix_ip_company_run", "company_id", "pipeline_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+    )
+    pipeline_run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("pipeline_runs.id")
+    )
+    short_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    target_dimension: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_subcategory: Mapped[str] = mapped_column(String(100), nullable=False)
+    target_detail: Mapped[str] = mapped_column(String(200), server_default="")
+    status: Mapped[str] = mapped_column(String(20), server_default="planned")
+    dollar_total: Mapped[float | None] = mapped_column(Float)
+    dollar_low: Mapped[float | None] = mapped_column(Float)
+    dollar_high: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float] = mapped_column(Float, server_default="0")
+    evidence_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    date_start: Mapped[date | None] = mapped_column(Date)
+    date_end: Mapped[date | None] = mapped_column(Date)
+    technology_area: Mapped[str] = mapped_column(String(100), server_default="")
+    deployment_scope: Mapped[str] = mapped_column(String(200), server_default="")
+    evidence_group_ids: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
+    valuation_ids: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    company: Mapped["CompanyModel"] = relationship()
+
+
 class ScoreChangeModel(Base):
     __tablename__ = "score_change_log"
 
@@ -633,6 +676,137 @@ class ScoreChangeModel(Base):
     )
 
     company: Mapped["CompanyModel"] = relationship(back_populates="score_changes")
+
+
+class HumanRatingModel(Base):
+    """User feedback/ratings attachable to any entity in the system."""
+
+    __tablename__ = "human_ratings"
+    __table_args__ = (
+        Index("ix_hr_entity", "entity_type", "entity_id"),
+        Index("ix_hr_created", "created_at"),
+        Index(
+            "ix_hr_action",
+            "action",
+            postgresql_where=text("action IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dimension: Mapped[str] = mapped_column(String(30), nullable=False, server_default="overall")
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    metadata_extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ── Agent Teams & Roster ──────────────────────────────────────
+
+
+class AgentTeamModel(Base):
+    __tablename__ = "agent_teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+
+
+class AgentModel(Base):
+    __tablename__ = "agents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    team_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agent_teams.id"), nullable=True)
+    role: Mapped[str] = mapped_column(String(50), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), server_default="idle")
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cycle_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    fix_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+
+
+class ChannelModel(Base):
+    __tablename__ = "agent_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    channel_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+
+
+class ChannelMessageModel(Base):
+    __tablename__ = "agent_messages"
+    __table_args__ = (
+        Index("ix_agent_messages_channel_created", "channel_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[int] = mapped_column(Integer, ForeignKey("agent_channels.id"), nullable=False)
+    agent_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
+    sender_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    message_type: Mapped[str] = mapped_column(String(20), server_default="chat")
+    metadata_extra: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+
+
+class AgentPlanModel(Base):
+    __tablename__ = "agent_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("agent_teams.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    plan_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), server_default="draft")
+    created_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"))
+    reviewed_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class PlanCommentModel(Base):
+    __tablename__ = "agent_plan_comments"
+    __table_args__ = (
+        Index("ix_plan_comments_plan", "plan_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(Integer, ForeignKey("agent_plans.id"), nullable=False)
+    line_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    author_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+
+
+class AgentProjectModel(Base):
+    __tablename__ = "agent_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[int] = mapped_column(Integer, ForeignKey("agent_plans.id"), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("agent_teams.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), server_default="active")
+    assigned_to: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
+    reviewer_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agents.id"), nullable=True)
+    files_changed: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    test_results: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # SQL for materialized view — run after initial migration

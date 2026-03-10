@@ -1,0 +1,221 @@
+{
+  "product_revenue_brackets": [
+    {"revenue": 50000000, "expected": 50000, "description": "$50M revenue -> below $100M bracket -> $50K"},
+    {"revenue": 500000000, "expected": 500000, "description": "$500M revenue -> $100M+ bracket -> $500K"},
+    {"revenue": 5000000000, "expected": 5000000, "description": "$5B revenue -> $1B+ bracket -> $5M"},
+    {"revenue": 1000000000, "expected": 5000000, "description": "$1B revenue -> exactly at $1B bracket -> $5M"},
+    {"revenue": 100000000, "expected": 500000, "description": "$100M revenue -> exactly at $100M bracket -> $500K"},
+    {"revenue": 0, "expected": 50000, "description": "$0 revenue -> below all brackets -> $50K"},
+    {"revenue": 10000, "expected": 50000, "description": "$10K revenue -> below $100M bracket -> $50K"},
+    {"revenue": 99999999, "expected": 50000, "description": "Just under $100M -> $50K"},
+    {"revenue": 999999999, "expected": 500000, "description": "Just under $1B -> $500K"}
+  ],
+  "cost_capture": [
+    {
+      "employees": 100,
+      "sector": "Technology",
+      "avg_salary": 100000,
+      "ai_applicability": 0.15,
+      "productivity_gain_pct": 0.15,
+      "confidence": 1.0,
+      "stage": "realized",
+      "stage_multiplier": 1.0,
+      "expected_base_annual": 225000.0,
+      "description": "100 tech employees, realized stage"
+    },
+    {
+      "employees": 1000,
+      "sector": "Financial Services",
+      "avg_salary": 85000,
+      "ai_applicability": 0.15,
+      "productivity_gain_pct": 0.15,
+      "confidence": 0.8,
+      "stage": "invested",
+      "stage_multiplier": 0.7,
+      "expected_base_annual": 1912500.0,
+      "description": "1000 finserv employees, invested stage"
+    },
+    {
+      "employees": 10000,
+      "sector": "Healthcare",
+      "avg_salary": 70000,
+      "ai_applicability": 0.15,
+      "productivity_gain_pct": 0.15,
+      "confidence": 0.5,
+      "stage": "planned",
+      "stage_multiplier": 0.3,
+      "expected_base_annual": 15750000.0,
+      "description": "10000 healthcare employees, planned stage"
+    },
+    {
+      "employees": 100000,
+      "sector": "Technology",
+      "avg_salary": 100000,
+      "ai_applicability": 0.15,
+      "productivity_gain_pct": 0.15,
+      "confidence": 1.0,
+      "stage": "realized",
+      "stage_multiplier": 1.0,
+      "expected_base_annual": 225000000.0,
+      "description": "100K tech employees, realized"
+    }
+  ],
+  "revenue_capture": [
+    {
+      "revenue": 1000000000,
+      "is_product": true,
+      "confidence": 1.0,
+      "stage": "realized",
+      "stage_multiplier": 1.0,
+      "penetration_rate": 0.05,
+      "expected_base_annual_product": 5000000,
+      "expected_base_annual_general": 50000000,
+      "description": "$1B revenue, product path, realized"
+    },
+    {
+      "revenue": 500000000,
+      "is_product": false,
+      "confidence": 0.8,
+      "stage": "invested",
+      "stage_multiplier": 0.7,
+      "penetration_rate": 0.05,
+      "expected_base_annual_product": 500000,
+      "expected_base_annual_general": 25000000,
+      "description": "$500M revenue, general path, invested"
+    },
+    {
+      "revenue": 50000000,
+      "is_product": true,
+      "confidence": 0.5,
+      "stage": "planned",
+      "stage_multiplier": 0.3,
+      "penetration_rate": 0.05,
+      "expected_base_annual_product": 50000,
+      "expected_base_annual_general": 2500000,
+      "description": "$50M revenue, product path, planned"
+    }
+  ],
+  "horizon_multipliers": [
+    {
+      "stage": "realized",
+      "multipliers": [1.0, 1.0, 1.0],
+      "shape": "flat",
+      "base_annual": 1000000,
+      "expected_y1": 1000000,
+      "expected_y2": 1000000,
+      "expected_y3": 1000000,
+      "description": "Realized: flat horizon"
+    },
+    {
+      "stage": "invested",
+      "multipliers": [0.33, 0.66, 1.0],
+      "shape": "linear_ramp",
+      "base_annual": 1000000,
+      "expected_y1": 330000,
+      "expected_y2": 660000,
+      "expected_y3": 1000000,
+      "description": "Invested: linear ramp"
+    },
+    {
+      "stage": "planned",
+      "multipliers": [0.10, 0.40, 1.0],
+      "shape": "back_loaded",
+      "base_annual": 1000000,
+      "expected_y1": 100000,
+      "expected_y2": 400000,
+      "expected_y3": 1000000,
+      "description": "Planned: back loaded"
+    }
+  ],
+  "stage_confidence_multipliers": [
+    {"stage": "realized", "expected": 1.0},
+    {"stage": "invested", "expected": 0.7},
+    {"stage": "planned", "expected": 0.3}
+  ],
+  "sector_salaries": [
+    {"sector": "Technology", "expected": 100000},
+    {"sector": "Financial Services", "expected": 85000},
+    {"sector": "Healthcare", "expected": 70000},
+    {"sector": "Communication Services", "expected": 90000},
+    {"sector": "Consumer Cyclical", "expected": 50000},
+    {"sector": "Consumer Defensive", "expected": 45000},
+    {"sector": "Industrials", "expected": 55000},
+    {"sector": "Energy", "expected": 60000},
+    {"sector": "Basic Materials", "expected": 50000},
+    {"sector": "Real Estate", "expected": 55000},
+    {"sector": "Utilities", "expected": 55000},
+    {"sector": null, "expected": 55000},
+    {"sector": "Unknown Sector", "expected": 55000}
+  ],
+  "edge_cases": [
+    {
+      "name": "zero_employees_cost_capture",
+      "employees": 0,
+      "revenue": 1000000000,
+      "sector": "Technology",
+      "target": "cost",
+      "stage": "realized",
+      "confidence": 1.0,
+      "expected_annual": 0.0,
+      "description": "Zero employees should produce $0 cost capture"
+    },
+    {
+      "name": "zero_revenue_revenue_capture",
+      "employees": 1000,
+      "revenue": 0,
+      "sector": "Technology",
+      "target": "revenue",
+      "stage": "realized",
+      "confidence": 1.0,
+      "is_product": false,
+      "expected_annual": 0.0,
+      "description": "Zero revenue with general path should produce $0 revenue capture"
+    },
+    {
+      "name": "zero_revenue_product_path",
+      "employees": 1000,
+      "revenue": 0,
+      "sector": "Technology",
+      "target": "revenue",
+      "stage": "realized",
+      "confidence": 1.0,
+      "is_product": true,
+      "expected_base_annual": 50000,
+      "description": "Zero revenue with product path still gets bracket minimum $50K"
+    },
+    {
+      "name": "missing_employees_field",
+      "employees": null,
+      "revenue": 1000000000,
+      "sector": "Technology",
+      "target": "cost",
+      "stage": "realized",
+      "confidence": 1.0,
+      "expected_annual": 0.0,
+      "description": "Missing employees (None) should produce $0 cost capture"
+    },
+    {
+      "name": "missing_revenue_field",
+      "employees": 1000,
+      "revenue": null,
+      "sector": "Technology",
+      "target": "revenue",
+      "stage": "realized",
+      "confidence": 1.0,
+      "is_product": false,
+      "expected_annual": 0.0,
+      "description": "Missing revenue (None) should produce $0 revenue capture"
+    },
+    {
+      "name": "zero_confidence",
+      "employees": 1000,
+      "revenue": 1000000000,
+      "sector": "Technology",
+      "target": "cost",
+      "stage": "realized",
+      "confidence": 0.0,
+      "expected_annual": 0.0,
+      "description": "Zero confidence should produce $0"
+    }
+  ]
+}

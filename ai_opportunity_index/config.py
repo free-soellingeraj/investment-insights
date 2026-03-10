@@ -22,7 +22,7 @@ EXTRACTED_DIR = RAW_DIR / "extracted"   # extracted/{TICKER}/{source_type}/{YYYY
 # ── Database ───────────────────────────────────────────────────────────────
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://localhost:5432/ai_opportunity_index",
+    f"postgresql://{os.environ.get('USER', 'postgres')}:@localhost:5432/ai_opportunity_index",
 )
 DB_POOL_SIZE = int(os.environ.get("DB_POOL_SIZE", "5"))
 DB_MAX_OVERFLOW = int(os.environ.get("DB_MAX_OVERFLOW", "10"))
@@ -107,7 +107,7 @@ QUADRANT_LABELS = {
     "high_opp_low_real": "Untapped Potential",
     "high_opp_high_real": "AI Leaders",
     "low_opp_high_real": "Over-investing?",
-    "low_opp_low_real": "AI-Resistant",
+    "low_opp_low_real": "Emerging",
 }
 
 # Legacy composite weights (cost/rev → single opportunity/realization number)
@@ -192,8 +192,13 @@ BLS_SALARY_DATA_PATH = DATA_DIR / "bls_salary_data.csv"
 # ── External API Keys ─────────────────────────────────────────────────
 PATENTSVIEW_API_KEY = os.environ.get("PATENTSVIEW_API_KEY", "")
 
+# ── Staleness Thresholds ─────────────────────────────────────────────────
+SCORE_STALENESS_WARNING_DAYS = 14  # warn after 14 days
+SCORE_STALENESS_CRITICAL_DAYS = 30  # critical after 30 days
+EVIDENCE_STALENESS_DAYS = 30  # evidence older than 30 days
+
 # ── Link Discovery ────────────────────────────────────────────────────
-LINK_DISCOVERY_MODEL = "gemini-2.5-flash"  # cheap LLM for URL classification
+LINK_DISCOVERY_MODEL = "gemini-2.0-flash"  # cheap LLM for URL classification (was 2.5-flash, 2.0 is 7x cheaper)
 LINK_DISCOVERY_CONCURRENCY = 5  # parallel website fetches
 
 # ── LLM Pipeline Config ──────────────────────────────────────────────
@@ -211,8 +216,14 @@ def get_google_provider():
         location=GOOGLE_VERTEX_REGION,
         vertexai=True,
     )
-LLM_EXTRACTION_MODEL = "gemini-2.5-flash"
-LLM_ESTIMATION_MODEL = "gemini-2.5-flash"
+LLM_EXTRACTION_MODEL = os.environ.get("LLM_EXTRACTION_MODEL", "gemini-2.5-flash")
+LLM_ESTIMATION_MODEL = os.environ.get("LLM_ESTIMATION_MODEL", "gemini-2.5-flash")
+
+# ── Groq Config ─────────────────────────────────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# Preferred Groq models (used when model name starts with "groq:")
+GROQ_EXTRACTION_MODEL = "moonshotai/kimi-k2-instruct-0905"  # 80% agreement, 21x faster than gemini
+GROQ_ESTIMATION_MODEL = "llama-3.3-70b-versatile"           # 80% agreement, 25x faster than gemini
 
 
 # ── Cache Policies ────────────────────────────────────────────────────────
