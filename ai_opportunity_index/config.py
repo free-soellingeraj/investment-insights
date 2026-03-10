@@ -15,6 +15,10 @@ RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 MS_AI_DIR = DATA_DIR / "microsoft_ai_applicability"
 
+# ── Unified source/extraction file layout ────────────────────────────────
+SOURCES_DIR = RAW_DIR / "sources"       # sources/{TICKER}/{source_type}/{YYYY}/{MM}/{uuid}.json
+EXTRACTED_DIR = RAW_DIR / "extracted"   # extracted/{TICKER}/{source_type}/{YYYY}/{MM}/{uuid}.json
+
 # ── Database ───────────────────────────────────────────────────────────────
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -164,6 +168,19 @@ DOLLAR_PRODUCT_REVENUE_BRACKETS = {      # revenue bracket → per-product dolla
     1e8: 500_000,      # $100M+ → $500K
     0: 50_000,         # smaller → $50K
 }
+# ── AI Index (Expected Value) ────────────────────────────────────────
+# Stage weights: how much each evidence type contributes to capture probability.
+# Capture evidence (proven results) is weighted highest; plans lowest.
+AI_INDEX_STAGE_WEIGHTS = {
+    "plan": 0.10,
+    "investment": 0.35,
+    "capture": 0.70,
+}
+# Base probability floor — even with no evidence, there's some chance
+AI_INDEX_P_BASE = 0.05
+# Sigmoid steepness for mapping weighted progress to probability
+AI_INDEX_SIGMOID_K = 4.0
+
 # Horizon shape multipliers by capture stage
 DOLLAR_HORIZON_REALIZED = (1.0, 1.0, 1.0)
 DOLLAR_HORIZON_INVESTED = (0.33, 0.66, 1.0)

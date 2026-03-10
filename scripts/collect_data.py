@@ -22,7 +22,7 @@ from ai_opportunity_index.cost_tracker import CostTracker
 from ai_opportunity_index.data.company_universe import load_universe
 from ai_opportunity_index.data.financial_data import fetch_company_financials
 from ai_opportunity_index.data.sec_edgar import fetch_and_cache_filings
-from ai_opportunity_index.domains import FinancialObservation, PipelineRun, PipelineSubtask, PipelineTask
+from ai_opportunity_index.domains import FinancialMetric, FinancialObservation, FinancialUnits, PipelineRun, PipelineSubtask, PipelineTask, RunStatus, RunType
 from ai_opportunity_index.storage.db import (
     complete_pipeline_run,
     create_pipeline_run,
@@ -146,10 +146,10 @@ def _save_financials_to_db(records: list[dict], tracker: CostTracker, source: st
             continue
 
         metrics = {
-            "market_cap": ("usd", data.get("market_cap")),
-            "revenue": ("usd", data.get("revenue")),
-            "net_income": ("usd", data.get("net_income")),
-            "employees": ("count", data.get("employees")),
+            FinancialMetric.MARKET_CAP: (FinancialUnits.USD, data.get("market_cap")),
+            FinancialMetric.REVENUE: (FinancialUnits.USD, data.get("revenue")),
+            FinancialMetric.NET_INCOME: (FinancialUnits.USD, data.get("net_income")),
+            FinancialMetric.EMPLOYEES: (FinancialUnits.COUNT, data.get("employees")),
         }
         obs_items = []
         for metric, (units, value) in metrics.items():
@@ -284,16 +284,16 @@ def main():
                 run_id=run_id,
                 task=PipelineTask.COLLECT,
                 subtask=PipelineSubtask.YAHOO_FUNDAMENTALS,
-                run_type="full",
-                status="running",
+                run_type=RunType.FULL,
+                status=RunStatus.RUNNING,
                 parameters={"limit": args.limit},
             ))
             try:
                 logger.info("=== Phase 1: Fetching basic info for all companies ===")
                 fetch_basic_info(tracker, limit=args.limit)
-                complete_pipeline_run(run_id=run_id, status="completed")
+                complete_pipeline_run(run_id=run_id, status=RunStatus.COMPLETED)
             except Exception as exc:
-                complete_pipeline_run(run_id=run_id, status="failed", error_message=str(exc))
+                complete_pipeline_run(run_id=run_id, status=RunStatus.FAILED, error_message=str(exc))
                 raise
 
         if args.phase in ("full", "both"):
@@ -302,17 +302,17 @@ def main():
                 run_id=run_id,
                 task=PipelineTask.COLLECT,
                 subtask=PipelineSubtask.SEC_FILINGS,
-                run_type="full",
-                status="running",
+                run_type=RunType.FULL,
+                status=RunStatus.RUNNING,
                 parameters={"n_companies": args.n_companies, "years": args.years},
             ))
             try:
                 logger.info("=== Phase 2: Fetching full 3-year data for %d companies ===",
                             args.n_companies)
                 fetch_full_data(tracker, n_companies=args.n_companies, years=args.years)
-                complete_pipeline_run(run_id=run_id, status="completed")
+                complete_pipeline_run(run_id=run_id, status=RunStatus.COMPLETED)
             except Exception as exc:
-                complete_pipeline_run(run_id=run_id, status="failed", error_message=str(exc))
+                complete_pipeline_run(run_id=run_id, status=RunStatus.FAILED, error_message=str(exc))
                 raise
 
     finally:

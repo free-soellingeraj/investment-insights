@@ -11,29 +11,23 @@ Cloud Run Job that:
 import logging
 import os
 import sys
-import uuid
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import resend
 
-from ai_opportunity_index.domains import CompanyScore, Notification, PipelineRun, PipelineSubtask, PipelineTask
+from ai_opportunity_index.domains import Notification, RefreshStatus
+from ai_opportunity_index.pipeline import PipelineController, PipelineRequest, TriggerSource
 from ai_opportunity_index.storage.db import (
-    complete_pipeline_run,
     create_notification,
-    create_pipeline_run,
     get_pending_refresh_requests,
     get_session,
     init_db,
     refresh_latest_scores_view,
-    save_company_score,
-    save_evidence_batch,
     update_refresh_request_status,
 )
 from ai_opportunity_index.storage.models import CompanyModel, SubscriberModel
-from scripts.score_companies import build_evidence_items, score_single_company
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -86,72 +80,30 @@ def main():
         for req in pending:
             try:
                 # Mark as processing
-                update_refresh_request_status(req.id, "processing")
+                update_refresh_request_status(req.id, RefreshStatus.PROCESSING)
 
                 # Look up company
                 company = session.query(CompanyModel).get(req.company_id)
                 if not company:
                     logger.warning("Company ID %d not found, failing request %d", req.company_id, req.id)
-                    update_refresh_request_status(req.id, "failed")
+                    update_refresh_request_status(req.id, RefreshStatus.FAILED)
                     continue
 
-                # Create pipeline run for scoring
-                run_uuid = str(uuid.uuid4())
-                pipeline_run = create_pipeline_run(PipelineRun(
-                    run_id=run_uuid,
-                    task=PipelineTask.SCORE,
-                    subtask=PipelineSubtask.ALL,
-                    run_type="refresh_request",
-                    status="running",
-                    tickers_requested=[company.ticker],
-                ))
+                # Run extract + value + score via PipelineController
+                ticker_str = company.ticker or company.slug
+                pipeline_request = PipelineRequest(
+                    tickers=[ticker_str],
+                    stages={"extract_unified", "value_evidence", "score"},
+                    source=TriggerSource.REFRESH_REQUEST,
+                    max_concurrency=1,
+                    llm_concurrency=5,
+                    include_inactive=True,
+                )
+                results = PipelineController.run_sync(pipeline_request)
 
-                # Score the company
-                now = datetime.utcnow()
-                result = score_single_company(company)
-
-                if result:
-                    opp = result["opportunity"]
-                    capture = result["capture"]
-                    idx = result["index"]
-
-                    score = CompanyScore(
-                        company_id=company.id,
-                        pipeline_run_id=pipeline_run.id,
-                        revenue_opp_score=opp.get("revenue_opportunity"),
-                        cost_opp_score=opp.get("cost_opportunity"),
-                        composite_opp_score=opp["composite_opportunity"],
-                        filing_nlp_score=capture.get("filing_nlp_score"),
-                        product_score=capture.get("product_score"),
-                        composite_real_score=capture["composite_realization"],
-                        cost_capture_score=capture["cost_capture"],
-                        revenue_capture_score=capture["revenue_capture"],
-                        general_investment_score=capture["general_investment"],
-                        cost_roi=idx.get("cost_roi"),
-                        revenue_roi=idx.get("revenue_roi"),
-                        combined_roi=idx.get("combined_roi"),
-                        opportunity=idx["opportunity"],
-                        realization=idx["realization"],
-                        quadrant=idx["quadrant"],
-                        quadrant_label=idx["quadrant_label"],
-                        flags=result.get("flags", []),
-                        data_as_of=now,
-                        scored_at=now,
-                    )
-                    save_company_score(score)
-
-                    evidence_items = build_evidence_items(
-                        company_id=company.id,
-                        pipeline_run_id=pipeline_run.id,
-                        opp_scores=opp,
-                        evidence=result.get("evidence", {}),
-                        classified_outputs=result.get("classified_outputs"),
-                    )
-                    if evidence_items:
-                        save_evidence_batch(evidence_items)
-
-                    complete_pipeline_run(run_uuid, status="completed", tickers_succeeded=1)
-                    update_refresh_request_status(req.id, "completed", pipeline_run_id=pipeline_run.id)
+                failures = [r for r in results if not r.success and not r.skipped]
+                if not failures:
+                    update_refresh_request_status(req.id, RefreshStatus.COMPLETED)
 
                     # Create and send notification
                     subscriber = session.query(SubscriberModel).get(req.subscriber_id)
@@ -170,13 +122,13 @@ def main():
 
                     logger.info("Refresh complete for %s (request %d)", company.ticker, req.id)
                 else:
-                    complete_pipeline_run(run_uuid, status="failed")
-                    update_refresh_request_status(req.id, "failed")
-                    logger.warning("Scoring returned None for %s", company.ticker)
+                    update_refresh_request_status(req.id, RefreshStatus.FAILED)
+                    logger.warning("Pipeline failed for %s: %s", company.ticker,
+                                   [r.error for r in failures])
 
             except Exception as e:
                 logger.error("Failed to process refresh request %d: %s", req.id, e)
-                update_refresh_request_status(req.id, "failed")
+                update_refresh_request_status(req.id, RefreshStatus.FAILED)
 
         # Refresh materialized view — retry once on failure since CONCURRENTLY
         # can fail due to lock contention.  Dashboard reads from this view so

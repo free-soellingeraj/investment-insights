@@ -10,90 +10,45 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from sqlalchemy import func
+from sqlalchemy import text
 
 from ai_opportunity_index.storage.db import get_session
-from ai_opportunity_index.storage.models import (
-    AIRealizationScore,
-    Company,
-    IndexValue,
-)
 
 logger = logging.getLogger(__name__)
 
 
 def build_investable_universe() -> pd.DataFrame:
-    """Query DB for companies with real scores (have sector AND filing NLP != None).
+    """Query DB for scored companies from latest_company_scores materialized view.
 
     Returns a DataFrame ranked by composite score (opportunity + realization)
     with columns: ticker, company_name, sector, industry,
-    opportunity, realization, composite, filing_nlp_score.
+    opportunity, realization, composite, filing_nlp_score, ai_index_usd.
     """
-    session = get_session()
-    try:
-        # Get latest index values per company
-        latest_idx = (
-            session.query(
-                IndexValue.company_id,
-                func.max(IndexValue.scored_at).label("max_scored"),
-            )
-            .group_by(IndexValue.company_id)
-            .subquery()
+    with get_session() as session:
+        df = pd.read_sql(
+            text("""
+                SELECT ticker, company_name, sector, industry,
+                       opportunity, realization, filing_nlp_score,
+                       ai_index_usd, capture_probability
+                FROM latest_company_scores
+                WHERE sector IS NOT NULL
+                  AND sector != ''
+                  AND is_active = true
+                  AND filing_nlp_score IS NOT NULL
+            """),
+            session.bind,
         )
 
-        # Get latest realization scores per company
-        latest_real = (
-            session.query(
-                AIRealizationScore.company_id,
-                func.max(AIRealizationScore.scored_at).label("max_scored"),
-            )
-            .group_by(AIRealizationScore.company_id)
-            .subquery()
-        )
-
-        query = (
-            session.query(
-                Company.ticker,
-                Company.company_name,
-                Company.sector,
-                Company.industry,
-                IndexValue.opportunity,
-                IndexValue.realization,
-                AIRealizationScore.filing_nlp_score,
-            )
-            .join(IndexValue, Company.id == IndexValue.company_id)
-            .join(
-                latest_idx,
-                (IndexValue.company_id == latest_idx.c.company_id)
-                & (IndexValue.scored_at == latest_idx.c.max_scored),
-            )
-            .join(AIRealizationScore, Company.id == AIRealizationScore.company_id)
-            .join(
-                latest_real,
-                (AIRealizationScore.company_id == latest_real.c.company_id)
-                & (AIRealizationScore.scored_at == latest_real.c.max_scored),
-            )
-            .filter(
-                Company.sector.isnot(None),
-                Company.sector != "",
-                AIRealizationScore.filing_nlp_score.isnot(None),
-            )
-        )
-
-        df = pd.read_sql(query.statement, session.bind)
-
-        if df.empty:
-            logger.warning("No companies found in investable universe")
-            return df
-
-        # Composite = average of opportunity and realization
-        df["composite"] = (df["opportunity"] + df["realization"]) / 2.0
-        df = df.sort_values("composite", ascending=False).reset_index(drop=True)
-
-        logger.info("Investable universe: %d companies", len(df))
+    if df.empty:
+        logger.warning("No companies found in investable universe")
         return df
-    finally:
-        session.close()
+
+    # Composite = average of opportunity and realization
+    df["composite"] = (df["opportunity"] + df["realization"]) / 2.0
+    df = df.sort_values("composite", ascending=False).reset_index(drop=True)
+
+    logger.info("Investable universe: %d companies", len(df))
+    return df
 
 
 def build_index_variants(universe_df: pd.DataFrame) -> dict[str, pd.DataFrame]:

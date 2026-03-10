@@ -1,6 +1,6 @@
 """Stage 1: Evidence Munger — group extracted passages into evidence groups.
 
-Reads extraction caches (filing + news) and groups related passages by
+Reads extraction caches (unified + legacy) and groups related passages by
 target_dimension + fuzzy text similarity. Pure Python, no LLM calls.
 
 Output: EvidenceGroup domain objects ready for valuation.
@@ -14,11 +14,17 @@ from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from ai_opportunity_index.config import RAW_DIR
-from ai_opportunity_index.domains import EvidenceGroup, EvidenceGroupPassage
+from ai_opportunity_index.config import EXTRACTED_DIR, RAW_DIR
+from ai_opportunity_index.domains import (
+    EvidenceGroup,
+    EvidenceGroupPassage,
+    ExtractedItem,
+    SourceType,
+)
 
 logger = logging.getLogger(__name__)
 
+# Legacy paths (backward compat)
 EXTRACTED_FILINGS_DIR = RAW_DIR / "extracted_filings"
 EXTRACTED_NEWS_DIR = RAW_DIR / "extracted_news"
 
@@ -45,8 +51,62 @@ def _parse_date(s: str | None) -> date | None:
         return None
 
 
+# ── Unified loader (file-per-item layout) ─────────────────────────────────
+
+
+def _load_passages(
+    ticker: str,
+    source_types: list[SourceType] | None = None,
+) -> list[EvidenceGroupPassage]:
+    """Load passages from all (or specified) extracted item files.
+
+    Reads from the unified extracted/{TICKER}/{source_type}/**/*.json layout.
+    """
+    if source_types is None:
+        source_types = list(SourceType)
+
+    passages = []
+    for st in source_types:
+        type_dir = EXTRACTED_DIR / ticker.upper() / st.value
+        if not type_dir.is_dir():
+            continue
+        for item_path in type_dir.rglob("*.json"):
+            if item_path.name.startswith("_"):
+                continue
+            try:
+                item = ExtractedItem.model_validate_json(item_path.read_text())
+            except Exception:
+                logger.debug("Failed to parse extracted item %s", item_path)
+                continue
+            for p in item.passages:
+                text = p.passage_text
+                if not text or len(text) < 20:
+                    continue
+                passages.append(EvidenceGroupPassage(
+                    passage_text=text,
+                    source_type=st.value,
+                    source_filename=item.title,
+                    source_date=item.source_date,
+                    confidence=max(0.0, min(1.0, p.confidence)),
+                    reasoning=p.reasoning,
+                    target_dimension=p.target_dimension,
+                    capture_stage=p.capture_stage,
+                    source_url=item.url,
+                    source_author=item.author,
+                    source_author_role=item.author_role,
+                    source_author_affiliation=item.author_affiliation,
+                    source_publisher=item.publisher,
+                    source_access_date=item.access_date,
+                    source_authority=item.authority,
+                ))
+    return passages
+
+
+# ── Legacy loaders (backward compat) ─────────────────────────────────────
+
+
 def _load_filing_passages(ticker: str) -> list[EvidenceGroupPassage]:
-    """Load passages from extracted filings cache."""
+    """Load passages from extracted filings cache (legacy layout)."""
     cache_path = EXTRACTED_FILINGS_DIR / f"{ticker.upper()}.json"
     if not cache_path.exists():
         return []
@@ -85,7 +145,7 @@ def _load_filing_passages(ticker: str) -> list[EvidenceGroupPassage]:
 
 
 def _load_news_passages(ticker: str) -> list[EvidenceGroupPassage]:
-    """Load passages from extracted news cache."""
+    """Load passages from extracted news cache (legacy layout)."""
     cache_path = EXTRACTED_NEWS_DIR / f"{ticker.upper()}.json"
     if not cache_path.exists():
         return []
@@ -123,6 +183,9 @@ def _load_news_passages(ticker: str) -> list[EvidenceGroupPassage]:
     return passages
 
 
+# ── Grouping ─────────────────────────────────────────────────────────────
+
+
 def _group_passages(
     passages: list[EvidenceGroupPassage],
 ) -> list[list[EvidenceGroupPassage]]:
@@ -157,6 +220,29 @@ def _group_passages(
     return groups
 
 
+def _get_child_tickers(company_id: int) -> list[str]:
+    """Look up child share-class tickers for a company from the DB."""
+    try:
+        from ai_opportunity_index.storage.db import get_session
+        from ai_opportunity_index.storage.models import CompanyModel
+        session = get_session()
+        try:
+            company = session.get(CompanyModel, company_id)
+            if not company or not company.child_ticker_refs:
+                return []
+            tickers = []
+            for child_id in company.child_ticker_refs:
+                child = session.get(CompanyModel, child_id)
+                if child:
+                    tickers.append(child.ticker)
+            return tickers
+        finally:
+            session.close()
+    except Exception:
+        logger.debug("[%s] Could not look up child tickers", company_id)
+        return []
+
+
 def munge_evidence(
     ticker: str,
     company_id: int,
@@ -166,19 +252,59 @@ def munge_evidence(
 
     Groups passages by (target_dimension) + text similarity.
     Returns EvidenceGroup domain objects (without DB ids — caller saves them).
+
+    Loads from both unified (extracted/) and legacy (extracted_filings/, extracted_news/)
+    layouts, deduplicating by passage text.
+
+    Automatically includes extraction caches from child share-class tickers
+    (e.g. GOOG for GOOGL) if the company has child_ticker_refs set.
     """
-    # Load all passages from extraction caches
-    filing_passages = _load_filing_passages(ticker)
-    news_passages = _load_news_passages(ticker)
-    all_passages = filing_passages + news_passages
+    # Collect all tickers to load caches from (parent + children)
+    all_tickers = [ticker]
+    child_tickers = _get_child_tickers(company_id)
+    all_tickers.extend(child_tickers)
+    if child_tickers:
+        logger.info("[%s] Including child ticker caches: %s", ticker, child_tickers)
+
+    # Load all passages from both layouts across all tickers
+    all_passages: list[EvidenceGroupPassage] = []
+    seen_texts: set[str] = set()
+
+    for t in all_tickers:
+        # Unified layout (all source types)
+        unified_passages = _load_passages(t)
+        for p in unified_passages:
+            key = p.passage_text[:200]
+            if key not in seen_texts:
+                seen_texts.add(key)
+                all_passages.append(p)
+
+        # Legacy layout (filing + news only)
+        for p in _load_filing_passages(t):
+            key = p.passage_text[:200]
+            if key not in seen_texts:
+                seen_texts.add(key)
+                all_passages.append(p)
+        for p in _load_news_passages(t):
+            key = p.passage_text[:200]
+            if key not in seen_texts:
+                seen_texts.add(key)
+                all_passages.append(p)
 
     if not all_passages:
         logger.info("[%s] No extracted passages found for munging", ticker)
         return []
 
+    # Count by source type for logging
+    type_counts: dict[str, int] = {}
+    for p in all_passages:
+        st = p.source_type or "unknown"
+        type_counts[st] = type_counts.get(st, 0) + 1
+
     logger.info(
-        "[%s] Munging %d passages (%d filing, %d news)",
-        ticker, len(all_passages), len(filing_passages), len(news_passages),
+        "[%s] Munging %d passages (%s)",
+        ticker, len(all_passages),
+        ", ".join(f"{k}={v}" for k, v in sorted(type_counts.items())),
     )
 
     # Split by target_dimension first, then cluster within each dimension

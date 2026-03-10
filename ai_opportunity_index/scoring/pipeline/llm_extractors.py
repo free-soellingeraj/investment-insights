@@ -7,16 +7,21 @@ Guarded behind --use-llm flag; the formula implementations run by default.
 from __future__ import annotations
 
 import logging
-from typing import Literal
 
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator
 
 from ai_opportunity_index.config import LLM_EXTRACTION_MODEL
+from ai_opportunity_index.domains import CaptureStage, TargetDimension
+
+
+def _lower_strip(v: str) -> str:
+    """Normalize LLM enum output to lowercase."""
+    if isinstance(v, str):
+        return v.strip().lower()
+    return v
 from ai_opportunity_index.prompts.loader import load_prompt
-from ai_opportunity_index.scoring.evidence_classification import (
-    CaptureStage,
-    TargetDimension,
-)
 from ai_opportunity_index.scoring.pipeline.base import EvidenceExtractor
 from ai_opportunity_index.scoring.pipeline.models import EvidencePassage
 
@@ -30,8 +35,8 @@ class ExtractedPassage(BaseModel):
     """Structured output for a single extracted evidence passage."""
 
     passage_text: str
-    target_dimension: Literal["cost", "revenue", "general"]
-    capture_stage: Literal["planned", "invested", "realized"]
+    target_dimension: Annotated[TargetDimension, BeforeValidator(_lower_strip)]
+    capture_stage: Annotated[CaptureStage, BeforeValidator(_lower_strip)]
     confidence: float  # 0-1
     reasoning: str
 
@@ -42,35 +47,28 @@ class ExtractedPassages(BaseModel):
     passages: list[ExtractedPassage]
 
 
-# ── Target/Stage enum mapping ────────────────────────────────────────────
-
-_TARGET_MAP = {
-    "cost": TargetDimension.COST,
-    "revenue": TargetDimension.REVENUE,
-    "general": TargetDimension.GENERAL,
-}
-
-_STAGE_MAP = {
-    "planned": CaptureStage.PLANNED,
-    "invested": CaptureStage.INVESTED,
-    "realized": CaptureStage.REALIZED,
-}
-
-
 def _to_evidence_passages(
     extracted: ExtractedPassages,
     source_type: str,
     source_document: str,
 ) -> list[EvidencePassage]:
-    """Convert LLM output to EvidencePassage objects."""
+    """Convert LLM output to EvidencePassage objects.
+
+    The ExtractedPassage model uses TargetDimension/CaptureStage enums directly.
+    Pydantic handles case-insensitive coercion for str enums, but we add fallback
+    defaults in case the LLM returns an unexpected value.
+    """
     results = []
     for p in extracted.passages:
+        # Pydantic already coerces to enum; use directly with safe fallback
+        target = p.target_dimension if isinstance(p.target_dimension, TargetDimension) else TargetDimension.GENERAL
+        stage = p.capture_stage if isinstance(p.capture_stage, CaptureStage) else CaptureStage.INVESTED
         results.append(EvidencePassage(
             source_type=source_type,
             source_document=source_document,
             passage_text=p.passage_text[:500],
-            target=_TARGET_MAP.get(p.target_dimension, TargetDimension.GENERAL),
-            stage=_STAGE_MAP.get(p.capture_stage, CaptureStage.INVESTED),
+            target=target,
+            stage=stage,
             confidence=max(0.0, min(1.0, p.confidence)),
             metadata={"reasoning": p.reasoning, "method": "llm"},
         ))

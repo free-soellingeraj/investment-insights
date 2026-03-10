@@ -17,12 +17,45 @@
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .score-bar { height: 8px; border-radius: 4px; background: #1f2937; overflow: hidden; }
         .score-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+        .pipeline-tip { position: relative; }
+        .pipeline-tip .tip-text {
+            visibility: hidden; opacity: 0;
+            position: absolute; bottom: calc(100% + 8px); left: 50%;
+            transform: translateX(-50%); width: 220px;
+            background: #1f2937; border: 1px solid #374151; border-radius: 8px;
+            padding: 8px 10px; font-size: 11px; line-height: 1.4;
+            color: #d1d5db; text-align: left; z-index: 50;
+            pointer-events: none; transition: opacity 0.15s;
+            box-shadow: 0 4px 12px rgba(0,0,0,.4);
+        }
+        details summary::-webkit-details-marker { display: none; }
+        details summary::marker { display: none; content: ''; }
+        details[open] .details-arrow { transform: rotate(90deg); }
+        #evidence-scroll-area::-webkit-scrollbar { width: 6px; }
+        #evidence-scroll-area::-webkit-scrollbar-track { background: transparent; }
+        #evidence-scroll-area::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        #evidence-scroll-area::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+        .pipeline-tip .tip-text::after {
+            content: ''; position: absolute; top: 100%; left: 50%;
+            transform: translateX(-50%);
+            border: 5px solid transparent; border-top-color: #374151;
+        }
+        .pipeline-tip:hover .tip-text { visibility: visible; opacity: 1; }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 antialiased">
     <script>
         const AUTH_TOKEN = "{{TOKEN}}";
         const TICKER = "{{TICKER}}";
+        // Fetch canonical stage order from pipeline DAG (cached as a promise)
+        const _pipelineStagesPromise = fetch('/api/pipeline/stages')
+            .then(r => r.json())
+            .then(d => d.stages || [])
+            .catch(() => [
+                'discover_links', 'collect_news', 'collect_github', 'collect_analysts',
+                'collect_web_enrichment', 'extract_filings', 'extract_news', 'extract_unified',
+                'value_evidence', 'score',
+            ]);
     </script>
 
     <!-- Nav -->
@@ -105,24 +138,81 @@
             const peers = peersData.peers || [];
             const evidence = data.evidence || {};
 
-            document.getElementById('nav-title').textContent = `${data.ticker} — ${data.company_name || ''}`;
-            document.title = `${data.ticker} — AI Opportunity Index`;
+            const displayTicker = data.requested_ticker || data.ticker || data.slug || TICKER;
+            document.getElementById('nav-title').textContent = `${displayTicker} — ${data.company_name || ''}`;
+            document.title = `${displayTicker} — AI Opportunity Index`;
 
             let h = '';
 
+            // ── Alias banner (secondary listing) ────────────────────────
+            const isAlias = data.is_alias;
+            const canonicalTicker = data.canonical_ticker || data.ticker;
+            const requestedTicker = data.requested_ticker || TICKER;
+            const childTickers = data.child_tickers || [];
+
             // ── Header ──────────────────────────────────────────────────
+            let aliasHtml = '';
+            if (isAlias) {
+                aliasHtml = `<div class="flex items-center gap-2 mt-1.5">
+                    <span class="text-xs px-2 py-0.5 rounded-md bg-sky-900/40 text-sky-400 border border-sky-800/50 font-semibold">Secondary Listing</span>
+                    <span class="text-xs text-gray-500">Primary:</span>
+                    <a href="/company/${canonicalTicker}?token=${AUTH_TOKEN}" class="text-xs px-2 py-0.5 rounded-md bg-gray-800 text-sky-400 border border-sky-800/50 hover:text-sky-300 hover:border-sky-700 transition-colors">${canonicalTicker}</a>
+                </div>`;
+            }
+            const shareClassHtml = childTickers.length > 0
+                ? `<div class="flex items-center gap-2 mt-1.5">
+                    <span class="text-xs px-2 py-0.5 rounded-md bg-brand-900/40 text-brand-400 border border-brand-800/50 font-semibold">Primary Listing</span>
+                    <span class="text-xs text-gray-500">Share classes:</span>
+                    ${childTickers.map(t => `<a href="/company/${t}?token=${AUTH_TOKEN}" class="text-xs px-2 py-0.5 rounded-md bg-gray-800 text-gray-400 border border-gray-700 hover:text-brand-400 hover:border-brand-700 transition-colors">${t}</a>`).join(' ')}
+                  </div>`
+                : '';
+            const displayTickerLabel = data.ticker || data.slug || TICKER || '';
             h += `<div class="mb-8">
                 <div class="flex items-start justify-between flex-wrap gap-4">
                     <div>
-                        <h1 class="text-3xl font-bold">${data.ticker} <span class="text-gray-500 font-normal text-xl">— ${data.company_name || ''}</span></h1>
+                        <h1 class="text-3xl font-bold">${displayTickerLabel} <span class="text-gray-500 font-normal text-xl">— ${data.company_name || ''}</span></h1>
                         <p class="text-sm text-gray-400 mt-1">${[data.sector, data.industry, data.exchange].filter(Boolean).join(' · ')}</p>
+                        ${aliasHtml}
+                        ${shareClassHtml}
                     </div>
-                    <div class="flex items-center gap-3">
+                    <div class="flex items-center gap-2 flex-wrap">
                         ${quadrantBadge(s.quadrant, s.quadrant_label)}
-                        <button onclick="requestRefresh()" class="bg-brand-600 hover:bg-brand-700 px-4 py-2 rounded-lg text-sm font-medium">Request Refresh</button>
+                        ${(s.flags && Array.isArray(s.flags) ? s.flags : []).map(f => {
+                            const fKey = f.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+                            const flagColors = { 'low_evidence': 'bg-amber-900/40 text-amber-400 border-amber-800', 'stale_data': 'bg-orange-900/40 text-orange-400 border-orange-800', 'high_variance': 'bg-red-900/40 text-red-400 border-red-800', 'no_filings': 'bg-gray-800 text-gray-400 border-gray-700' };
+                            return `<span class="text-xs px-2 py-0.5 rounded-full border ${flagColors[fKey] || 'bg-gray-800 text-gray-400 border-gray-700'}">${f}</span>`;
+                        }).join('')}
                     </div>
                 </div>
             </div>`;
+
+            // ── Parent company banner (if this is a subsidiary) ──────────
+            const parentCompanies = data.parent_companies || [];
+            if (parentCompanies.length > 0) {
+                h += `<div class="bg-sky-900/20 border border-sky-800/50 rounded-xl p-4 mb-6">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="text-xs px-2 py-0.5 rounded-md bg-sky-900/40 text-sky-400 border border-sky-800/50 font-semibold">Subsidiary</span>
+                        <span class="text-sm text-gray-400">Owned by:</span>
+                    </div>
+                    <div class="flex flex-wrap gap-2 mt-2">
+                        ${parentCompanies.map(p => {
+                            const pLabel = p.ticker || p.slug;
+                            const pctStr = p.ownership_pct != null ? ` (${(p.ownership_pct * 100).toFixed(0)}% owned)` : '';
+                            return `<a href="/company/${pLabel}?token=${AUTH_TOKEN}" class="text-sm px-3 py-1.5 rounded-lg bg-gray-800 text-sky-400 border border-sky-800/50 hover:text-sky-300 hover:border-sky-700 transition-colors">${pLabel} — ${p.company_name || ''}${pctStr}</a>`;
+                        }).join('')}
+                    </div>
+                </div>`;
+
+                // If no scores and no evidence at all, show "not yet analyzed"
+                const hasAnyEvidence = Object.keys(evidence).length > 0 && Object.values(evidence).some(arr => arr && arr.length > 0);
+                const hasFinancials = Object.keys(fin).length > 0;
+                if (s.opportunity == null && s.realization == null && !hasAnyEvidence && !hasFinancials) {
+                    h += `<div class="bg-amber-900/20 border border-amber-800/50 rounded-xl p-6 mb-8 text-center">
+                        <p class="text-amber-400 font-semibold mb-2">This subsidiary has not been analyzed yet.</p>
+                        <p class="text-sm text-gray-400 mb-4">Run the pipeline stages below to collect data and generate scores for this company.</p>
+                    </div>`;
+                }
+            }
 
             // ── Financials row ───────────────────────────────────────────
             const finItems = [
@@ -137,115 +227,104 @@
                 h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
                     <div class="text-xs text-gray-500 uppercase tracking-wide">${fi.label}</div>
                     <div class="text-xl font-bold mt-1">${obs ? fmtMoney(obs.value, obs.value_units) : '—'}</div>
-                    ${obs?.source_name ? `<div class="text-xs text-gray-600 mt-1">via ${obs.source_name}</div>` : ''}
+                    ${obs?.source_name && obs.source_name !== 'llm_discovery' ? `<div class="text-xs text-gray-600 mt-1">via ${obs.source_name}</div>` : ''}
                 </div>`;
             }
             h += '</div>';
 
-            // ── Scores ──────────────────────────────────────────────────
-            h += '<div class="grid md:grid-cols-2 gap-6 mb-8">';
+            // ── AI Opportunity Hero Card (Transparent Calculation) ─────
+            {
+                // Client-side fallback: compute opportunity_usd from financials if not stored
+                const employees = fin.employees ? fin.employees.value : null;
+                const revenue = fin.revenue ? fin.revenue.value : null;
+                const costOppScore = s.cost_opp || 0;
+                const fallbackCostOpp = (employees || 0) * 135000 * costOppScore * 0.15;
+                const fallbackRevOpp = (revenue || 0) * 0.05;
+                const costOppUsd = s.cost_opp_usd != null ? s.cost_opp_usd : fallbackCostOpp;
+                const revOppUsd = s.revenue_opp_usd != null ? s.revenue_opp_usd : fallbackRevOpp;
+                const oppUsd = s.opportunity_usd != null ? s.opportunity_usd : (costOppUsd + revOppUsd);
+                const pCapture = s.capture_probability;
+                const aiOpp = s.ai_index_usd != null ? s.ai_index_usd : (pCapture != null && oppUsd ? pCapture * oppUsd : null);
+                const evidenceDollars = s.evidence_dollars;
+                const rankStr = data.ai_index_rank != null ? `#${data.ai_index_rank} of ${data.ai_index_total}` : null;
 
-            // Opportunity scores
-            h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <h3 class="font-semibold mb-2 text-gray-300">Opportunity Scores</h3>
-                <p class="text-xs text-gray-500 mb-3">How much could AI structurally help this company? Derived from BLS workforce data and Microsoft AI applicability research.</p>
-                ${scoreBar('Cost Opportunity', s.cost_opp, '#22c55e')}
-                <div class="text-xs text-gray-600 mb-2 pl-[140px]">What share of this company's workforce performs tasks that AI could automate or augment, reducing operating costs.</div>
-                ${scoreBar('Revenue Opportunity', s.revenue_opp, '#8b5cf6')}
-                <div class="text-xs text-gray-600 mb-2 pl-[140px]">How much AI could enhance or create new revenue streams, based on industry and product mix.</div>
-                ${scoreBar('Composite', s.composite_opp, '#818cf8')}
-                <div class="text-xs text-gray-600 mb-1 pl-[140px]">Weighted average of cost and revenue opportunity (50/50).</div>
-                <div class="mt-4 bg-gray-800/50 rounded-lg p-3 text-xs text-gray-500 leading-relaxed">
-                    <strong class="text-gray-400">How to read:</strong> 0.0 = AI has minimal applicability to this company's operations.
-                    0.5 = moderate — some roles and revenue lines could benefit.
-                    1.0 = very high — most of the workforce and revenue are in AI-transformable areas.
-                    These scores reflect <em>structural potential</em>, not what the company is actually doing with AI (that's Capture).
-                </div>
-            </div>`;
+                const fmtD = v => {
+                    if (v == null) return '—';
+                    if (v === 0) return '$0';
+                    if (v >= 1e12) return '$' + (v / 1e12).toFixed(1) + 'T';
+                    if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+                    if (v >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
+                    if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+                    return '$' + Math.round(v).toLocaleString();
+                };
 
-            // Capture/Realization scores
-            h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
-                <h3 class="font-semibold mb-2 text-gray-300">Capture Scores</h3>
-                <p class="text-xs text-gray-500 mb-3">What is this company actually doing with AI? Evidence from SEC filings, news, hiring, and patents.</p>
-                <div class="text-xs text-gray-600 uppercase tracking-wide mb-2 font-semibold">Dimension capture (classified outputs)</div>
-                ${scoreBar('Cost Capture', s.cost_capture, '#22c55e')}
-                <div class="text-xs text-gray-600 mb-2 pl-[140px]">Evidence of AI deployed to reduce costs (automation, efficiency).</div>
-                ${scoreBar('Revenue Capture', s.revenue_capture, '#8b5cf6')}
-                <div class="text-xs text-gray-600 mb-2 pl-[140px]">Evidence of AI-powered products, services, or revenue growth.</div>
-                ${scoreBar('General AI', s.general_investment, '#eab308')}
-                <div class="text-xs text-gray-600 mb-1 pl-[140px]">Broad AI mentions not tied to cost or revenue (strategy, R&D).</div>
-                <div class="mt-4 bg-gray-800/50 rounded-lg p-3 text-xs text-gray-500 leading-relaxed">
-                    <strong class="text-gray-400">How to read:</strong> 0.0 = no evidence of AI activity.
-                    0.3 = some mentions or early signals.
-                    0.6 = meaningful AI deployment with multiple evidence sources.
-                    1.0 = extensive, multi-dimensional AI capture across filings, products, hiring, and patents.
-                </div>
-            </div>`;
-            h += '</div>';
-
-            // ROI summary
-            h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
-                <h3 class="font-semibold mb-3 text-gray-300">ROI Summary</h3>
-                <p class="text-xs text-gray-500 mb-3">Capture / Opportunity. Values above 1.0x mean the company is capturing more AI value than its structural opportunity suggests.</p>
-                <div class="grid grid-cols-3 gap-6 text-center">
-                    <div>
-                        <div class="text-xs text-gray-500 uppercase mb-1">Cost ROI</div>
-                        <div class="text-2xl font-bold" style="color:${scoreColor(s.cost_roi)}">${fmtRoi(s.cost_roi)}</div>
+                h += `<div class="bg-gradient-to-r from-brand-900/40 to-gray-900 border border-brand-800/50 rounded-xl p-6 mb-8">
+                    <div class="flex items-center justify-between flex-wrap gap-4 mb-4">
+                        <div class="text-xs text-gray-500 uppercase tracking-wide font-semibold">AI Opportunity</div>
+                        <div class="flex items-center gap-3">
+                            ${rankStr ? `<span class="text-xs text-gray-500 font-mono">${rankStr}</span>` : ''}
+                            ${quadrantBadge(s.quadrant, s.quadrant_label)}
+                        </div>
                     </div>
-                    <div>
-                        <div class="text-xs text-gray-500 uppercase mb-1">Revenue ROI</div>
-                        <div class="text-2xl font-bold" style="color:${scoreColor(s.revenue_roi)}">${fmtRoi(s.revenue_roi)}</div>
-                    </div>
-                    <div>
-                        <div class="text-xs text-gray-500 uppercase mb-1">Combined ROI</div>
-                        <div class="text-2xl font-bold" style="color:${scoreColor(s.combined_roi)}">${fmtRoi(s.combined_roi)}</div>
-                    </div>
-                </div>
-                ${s.scored_at ? `<div class="text-xs text-gray-600 text-center mt-3">Scored: ${new Date(s.scored_at).toLocaleString()}</div>` : ''}
-            </div>`;
 
-            // ── Dollar Estimates ──────────────────────────────────────────
-            const fmtDollar = v => {
-                if (v == null || v === 0) return '—';
-                if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
-                if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
-                if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
-                return '$' + v.toFixed(0);
-            };
+                    <!-- Main equation: AI Opp = P(capture) x Opportunity -->
+                    <div class="flex items-center gap-3 flex-wrap mb-4">
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-brand-400">${fmtD(aiOpp)}</div>
+                            <div class="text-xs text-gray-500 mt-0.5">AI Opportunity</div>
+                        </div>
+                        <div class="text-2xl text-gray-600 font-light">=</div>
+                        <div class="text-center">
+                            <div class="text-2xl font-bold" style="color:${scoreColor(pCapture)}">${pCapture != null ? (pCapture * 100).toFixed(1) + '%' : '—'}</div>
+                            <div class="text-xs text-gray-500 mt-0.5">P(capture)</div>
+                        </div>
+                        <div class="text-2xl text-gray-600 font-light">&times;</div>
+                        <div class="text-center">
+                            <div class="text-2xl font-bold text-gray-300">${fmtD(oppUsd)}</div>
+                            <div class="text-xs text-gray-500 mt-0.5">Opportunity</div>
+                        </div>
+                    </div>
 
-            if (s.cost_opp_usd != null || s.revenue_opp_usd != null || s.total_investment_usd != null) {
-                h += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8">
-                    <h3 class="font-semibold mb-3 text-gray-300">Dollar Estimates (3-Year Horizon)</h3>
-                    <p class="text-xs text-gray-500 mb-4">Estimated dollar impact of AI initiatives based on company financials, workforce data, and evidence signals.</p>
-                    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
-                        <div>
-                            <div class="text-xs text-gray-500 uppercase mb-1">Cost Opportunity</div>
-                            <div class="text-xl font-bold text-green-400">${fmtDollar(s.cost_opp_usd)}</div>
+                    <!-- Opportunity breakdown -->
+                    <div class="grid md:grid-cols-2 gap-4 mb-3">
+                        <div class="bg-gray-800/40 rounded-lg p-3">
+                            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Cost Savings Opportunity</div>
+                            <div class="text-lg font-bold text-green-400">${fmtD(costOppUsd)}</div>
+                            <div class="text-xs text-gray-600 mt-1">${employees ? Math.round(employees).toLocaleString() + ' employees' : '—'} &times; $135K &times; ${(costOppScore * 100).toFixed(0)}% AI applicability &times; 15% productivity</div>
                         </div>
-                        <div>
-                            <div class="text-xs text-gray-500 uppercase mb-1">Revenue Opportunity</div>
-                            <div class="text-xl font-bold text-purple-400">${fmtDollar(s.revenue_opp_usd)}</div>
+                        <div class="bg-gray-800/40 rounded-lg p-3">
+                            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Revenue Opportunity</div>
+                            <div class="text-lg font-bold text-purple-400">${fmtD(revOppUsd)}</div>
+                            <div class="text-xs text-gray-600 mt-1">5% of ${revenue ? fmtD(revenue) : '—'} revenue</div>
                         </div>
-                        <div>
-                            <div class="text-xs text-gray-500 uppercase mb-1">Cost Capture</div>
-                            <div class="text-xl font-bold text-green-300">${fmtDollar(s.cost_capture_usd)}</div>
-                        </div>
-                        <div>
-                            <div class="text-xs text-gray-500 uppercase mb-1">Revenue Capture</div>
-                            <div class="text-xl font-bold text-purple-300">${fmtDollar(s.revenue_capture_usd)}</div>
-                        </div>
-                        <div>
-                            <div class="text-xs text-gray-500 uppercase mb-1">Total Investment</div>
-                            <div class="text-xl font-bold text-amber-400">${fmtDollar(s.total_investment_usd)}</div>
-                        </div>
+                    </div>
+
+                    <!-- Evidence basis -->
+                    <div id="hero-evidence-basis" class="text-xs text-gray-500 border-t border-gray-800/50 pt-2 mt-2">
+                        ${evidenceDollars != null ? `Evidence basis: ${fmtD(evidenceDollars)} across valuations` : 'Evidence basis: loading...'}
                     </div>
                 </div>`;
             }
 
-            // ── Evidence (Valuation Viewer) ────────────────────────────────
+            // ── Evidence Quality Summary (populated after valuations load) ──
+            h += '<div id="evidence-quality-summary" class="mb-8"></div>';
+
+            // ── Company Links (editable) ─────────────────────────────────
+            h += '<div id="company-links-section" class="mb-8"></div>';
+
+            // ── Pipeline Status Matrix ────────────────────────────────────
+            h += '<div id="pipeline-status-section" class="mb-8"></div>';
+            h += '<div id="rescore-indicator" class="mb-8"></div>';
+
+            // ── Recent Pipeline Runs ─────────────────────────────────────
+            h += '<div id="pipeline-runs-section" class="mb-8"></div>';
+
+            // ── Evidence (Valuation Viewer + Enrichments) ────────────────
+            // Scrollable container for all evidence content
+            h += '<div id="evidence-container" class="mb-8"><h3 class="text-xl font-bold mb-4">Evidence</h3><div id="evidence-scroll-area" class="max-h-[800px] overflow-y-auto pr-1 space-y-4">';
 
             // Valuation viewer — lazy-loaded after DOM render
-            h += '<div id="valuation-section" class="mb-8"><div class="text-center py-8"><div class="loader mx-auto"></div><p class="mt-2 text-gray-500 text-xs">Loading valuations...</p></div></div>';
+            h += '<div id="valuation-section"><div class="text-center py-8"><div class="loader mx-auto"></div><p class="mt-2 text-gray-500 text-xs">Loading valuations...</p></div></div>';
 
             // Legacy evidence fallback helpers
             function evidenceSummary(ev) {
@@ -544,6 +623,9 @@
                 h += `</div></div></div>`;
             }
 
+            // Close the evidence scroll area and container
+            h += '</div></div>';
+
             // ── Peers ────────────────────────────────────────────────────
             if (peers.length > 1) {
                 h += `<div class="mb-8">
@@ -579,8 +661,15 @@
             document.getElementById('content').classList.remove('hidden');
             document.getElementById('content').innerHTML = h;
 
-            // Now that DOM is rendered, load valuations into the section
+            // Store subsidiaries/parents for the company info section
+            window._subsidiaries = data.subsidiaries || [];
+            window._parentCompanies = data.parent_companies || [];
+
+            // Now that DOM is rendered, load valuations, pipeline status, and runs
             loadValuations(TICKER);
+            loadPipelineStatus(TICKER);
+            loadCompanyLinks(TICKER);
+            loadCompanyRuns(TICKER);
 
         } catch (e) {
             document.getElementById('loading').innerHTML = `<p class="text-red-400">Error loading profile: ${e.message}</p>`;
@@ -597,20 +686,8 @@
         return cls[q] || 'bg-gray-800 text-gray-400';
     }
 
-    async function requestRefresh() {
-        try {
-            const res = await fetch(`/api/companies/${TICKER}/refresh?token=${AUTH_TOKEN}`, { method: 'POST' });
-            const data = await res.json();
-            alert(data.ok ? data.message : (data.error || 'Refresh request failed.'));
-        } catch (e) {
-            alert('Failed to request refresh.');
-        }
-    }
-
     // ── Valuation Viewer ────────────────────────────────────────────────
     const typeBadgeColors = { plan: 'bg-blue-900/50 text-blue-400 border-blue-800', investment: 'bg-amber-900/50 text-amber-400 border-amber-800', capture: 'bg-green-900/50 text-green-400 border-green-800' };
-    const dimTabColors = { cost: 'border-green-500 text-green-400', revenue: 'border-purple-500 text-purple-400', general: 'border-yellow-500 text-yellow-400' };
-    const dimTabBg = { cost: 'bg-green-900/20', revenue: 'bg-purple-900/20', general: 'bg-yellow-900/20' };
 
     function factorBar(label, value, maxVal) {
         const pct = maxVal > 0 ? Math.min((value / maxVal) * 100, 100) : 0;
@@ -628,12 +705,20 @@
 
         try {
             console.log('[val] fetching...');
-            const resp = await fetch(`/api/companies/${ticker}/valuations`);
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            let resp;
+            try {
+                resp = await fetch(`/api/companies/${ticker}/valuations`, { signal: controller.signal });
+            } finally {
+                clearTimeout(timeout);
+            }
             const vData = await resp.json();
             console.log('[val] got data, keys:', Object.keys(vData));
 
             if (vData.error || !vData.dimensions) {
-                // Fallback to legacy evidence
+                // Fallback to legacy evidence or "no data" message
+                container.innerHTML = '';
                 renderLegacyEvidence(container);
                 return;
             }
@@ -643,10 +728,18 @@
             // 1. Pipeline Summary Bar
             const tc = vData.type_counts || {};
             const dimKeys = Object.keys(vData.dimensions);
+            const vChildTickers = vData.child_tickers || [];
+            const vIsAlias = vData.is_alias;
+            const shareClassNote = vChildTickers.length > 0
+                ? `<span class="text-xs text-gray-500 ml-2">(includes ${vChildTickers.join(', ')})</span>`
+                : vIsAlias
+                    ? `<span class="text-xs text-amber-400/70 ml-2">(canonical: ${vData.canonical_ticker})</span>`
+                    : '';
             vh += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
                 <div class="flex items-center justify-between flex-wrap gap-3">
                     <div class="flex items-center gap-2 text-sm">
                         <span class="font-semibold text-gray-200">Evidence Valuations</span>
+                        ${shareClassNote}
                         <span class="text-gray-500">|</span>
                         <span class="text-gray-400">${vData.total_passages} passages</span>
                         <span class="text-gray-600">&rarr;</span>
@@ -662,84 +755,128 @@
                 </div>
             </div>`;
 
-            // 2. Dimension Tabs
-            const orderedDims = ['cost', 'revenue', 'general'].filter(d => vData.dimensions[d]);
-            // Add any other dimensions
-            dimKeys.forEach(d => { if (!orderedDims.includes(d)) orderedDims.push(d); });
-
-            vh += `<div class="mb-4">
-                <div class="flex gap-2 border-b border-gray-800 pb-0" id="dim-tabs">`;
-            orderedDims.forEach((dim, i) => {
+            // 2. Flatten all groups into one list with metadata
+            const allGroups = [];
+            const dimKeys2 = Object.keys(vData.dimensions);
+            for (const dim of dimKeys2) {
                 const dd = vData.dimensions[dim];
-                const active = i === 0;
-                const tabColor = dimTabColors[dim] || 'border-gray-500 text-gray-400';
-                const tabBg = active ? (dimTabBg[dim] || 'bg-gray-800/30') : '';
-                vh += `<button class="px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${active ? tabColor + ' ' + tabBg : 'border-transparent text-gray-500 hover:text-gray-300'}" data-dim="${dim}" onclick="switchDimTab('${dim}')">
-                    ${dim.charAt(0).toUpperCase() + dim.slice(1)}
-                    <span class="ml-2 text-xs font-mono ${active ? '' : 'text-gray-600'}">${dd.dimension_score != null ? dd.dimension_score.toFixed(2) : '—'}</span>
-                    ${dd.potential_usd > 0 ? `<span class="ml-1 text-xs text-gray-500">${fmtMoney(dd.potential_usd)}</span>` : ''}
-                </button>`;
-            });
-            vh += `</div></div>`;
+                for (const g of (dd.groups || [])) {
+                    allGroups.push({ ...g, _dim: dim, _dimData: dd });
+                }
+            }
 
-            // 3. Dimension content panels
-            orderedDims.forEach((dim, i) => {
-                const dd = vData.dimensions[dim];
-                const groups = dd.groups || [];
-                // Sort by factor_score desc
-                groups.sort((a, b) => ((b.valuation?.factor_score) || 0) - ((a.valuation?.factor_score) || 0));
+            // Collect unique filter values
+            const allSources = new Set();
+            const allDims = new Set();
+            const allEvTypes = new Set();
+            const allCaptureStages = new Set();
+            for (const g of allGroups) {
+                allDims.add(g._dim);
+                (g.source_types || []).forEach(s => allSources.add(s));
+                if (g.valuation?.evidence_type) allEvTypes.add(g.valuation.evidence_type);
+                // Collect capture stages from passages as fallback
+                for (const p of (g.passages || [])) {
+                    if (p.capture_stage) allCaptureStages.add(p.capture_stage);
+                }
+                // Also check group-level evidence_type
+                if (g.evidence_type) allEvTypes.add(g.evidence_type);
+            }
 
-                vh += `<div class="dim-panel ${i === 0 ? '' : 'hidden'}" id="dim-panel-${dim}">`;
+            // Store data globally for filtering
+            window._evidenceGroups = allGroups;
+            window._evidenceFilters = { source: null, dimension: null, evType: null, captureStage: null, sort: 'date_newest' };
 
-                // Dimension summary
-                vh += `<div class="grid grid-cols-3 gap-4 mb-4">
-                    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
-                        <div class="text-xs text-gray-500 uppercase">Dimension Score</div>
-                        <div class="text-xl font-bold mt-1" style="color:${scoreColor(dd.dimension_score)}">${dd.dimension_score != null ? dd.dimension_score.toFixed(3) : '—'}</div>
-                    </div>
-                    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
-                        <div class="text-xs text-gray-500 uppercase">Potential (High)</div>
-                        <div class="text-xl font-bold mt-1 text-amber-400">${fmtMoney(dd.potential_usd)}</div>
-                    </div>
-                    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 text-center">
-                        <div class="text-xs text-gray-500 uppercase">Mid Estimate</div>
-                        <div class="text-xl font-bold mt-1 text-amber-300">${fmtMoney(dd.actual_usd)}</div>
-                    </div>
-                </div>`;
+            const dimBadgeColors = { cost: 'bg-green-900/30 text-green-400 border-green-800', revenue: 'bg-purple-900/30 text-purple-400 border-purple-800', general: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
+            const srcBadgeColors = { filing: 'bg-sky-900/30 text-sky-400 border-sky-800', news: 'bg-orange-900/30 text-orange-400 border-orange-800', github: 'bg-gray-700/50 text-gray-300 border-gray-600', careers: 'bg-pink-900/30 text-pink-400 border-pink-800', ir: 'bg-teal-900/30 text-teal-400 border-teal-800', blog: 'bg-indigo-900/30 text-indigo-400 border-indigo-800' };
 
-                // Group cards
-                vh += `<div class="space-y-3">`;
-                for (const g of groups) {
-                    const v = g.valuation;
-                    const gId = `vg-${g.id}`;
-                    const typeBadge = v ? typeBadgeColors[v.evidence_type] || 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-800 text-gray-400 border-gray-700';
-                    const narrativeSnip = v?.narrative ? (v.narrative.length > 120 ? v.narrative.slice(0, 120) + '...' : v.narrative) : (g.representative_text || '—');
-                    const dollarRange = v && v.dollar_low != null && v.dollar_high != null ? `${fmtMoney(v.dollar_low)} – ${fmtMoney(v.dollar_high)}` : '—';
-                    const fs = v?.factor_score;
+            // Filter bar
+            const filterBtn = (label, filterKey, value, defaultOn) => {
+                const active = defaultOn ? 'ev-filter-active' : '';
+                return `<button class="ev-filter-btn text-xs px-2 py-1 rounded border border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-500 transition-colors ${active}" data-filter-key="${filterKey}" data-filter-value="${value}" onclick="toggleEvidenceFilter(this)">${label}</button>`;
+            };
 
-                    // Build date info for summary
-                    const srcLabel = g.source_types?.length ? g.source_types.join(', ') : '';
-                    const pubDate = g.date_earliest || g.passages?.[0]?.source_date || null;
-                    const scrapedAt = g.grouped_at ? new Date(g.grouped_at).toLocaleString() : null;
+            vh += `<div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4" id="ev-filter-bar">
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                    <span class="text-xs text-gray-600 font-semibold uppercase w-16">Source</span>
+                    ${[...allSources].sort().map(s => filterBtn(s, 'source', s, false)).join('')}
+                </div>
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                    <span class="text-xs text-gray-600 font-semibold uppercase w-16">Target</span>
+                    ${[...allDims].sort().map(d => filterBtn(d.charAt(0).toUpperCase() + d.slice(1), 'dimension', d, false)).join('')}
+                </div>
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                    <span class="text-xs text-gray-600 font-semibold uppercase w-16">Stage</span>
+                    ${allEvTypes.size > 0
+                        ? [...allEvTypes].sort().map(t => filterBtn(t.charAt(0).toUpperCase() + t.slice(1), 'evType', t, false)).join('')
+                        : [...allCaptureStages].sort().map(t => filterBtn(t.charAt(0).toUpperCase() + t.slice(1), 'captureStage', t, false)).join('')}
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-600 font-semibold uppercase w-16">Sort</span>
+                    <select id="ev-sort-select" onchange="applyEvidenceFilters()" class="text-xs bg-gray-800 border border-gray-700 text-gray-300 rounded px-2 py-1">
+                        <option value="date_newest">Date (newest first)</option>
+                        <option value="dollar_high">Dollar Estimate (high first)</option>
+                        <option value="date_oldest">Date (oldest first)</option>
+                        <option value="confidence">Confidence (high first)</option>
+                    </select>
+                    <span class="text-xs text-gray-600 ml-auto" id="ev-count-label">${allGroups.length} groups</span>
+                </div>
+            </div>`;
 
-                    vh += `<div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-                        <!-- Summary row -->
-                        <div class="p-4 cursor-pointer hover:bg-gray-800/30 transition-colors" onclick="document.getElementById('${gId}').classList.toggle('hidden')">
-                            <div class="flex items-start justify-between gap-4">
-                                <div class="flex-1 min-w-0">
-                                    <div class="flex items-center gap-2 flex-wrap mb-1.5">
-                                        ${v ? `<span class="text-xs px-2 py-0.5 rounded border ${typeBadge}">${v.evidence_type}</span>` : ''}
-                                        <span class="text-xs text-gray-500">${g.passage_count || 0} passage${(g.passage_count || 0) !== 1 ? 's' : ''}</span>
-                                        ${srcLabel ? `<span class="text-xs text-gray-600">src: ${srcLabel}</span>` : ''}
-                                        ${pubDate ? `<span class="text-xs text-gray-600">pub: ${pubDate}</span>` : ''}
-                                        ${scrapedAt ? `<span class="text-xs text-gray-700">scraped: ${scrapedAt}</span>` : ''}
-                                        <span class="text-xs text-gray-600 ml-auto">click to expand</span>
-                                    </div>
-                                    <div class="text-sm text-gray-300 leading-relaxed">${narrativeSnip}</div>
+            // Groups container
+            vh += `<div id="ev-groups-list" class="space-y-3">`;
+
+            // Default sort by publish date (newest first)
+            allGroups.sort((a, b) => (b.date_earliest || '').localeCompare(a.date_earliest || ''));
+
+            for (const g of allGroups) {
+                const dim = g._dim;
+                const v = g.valuation;
+                const gId = `vg-${g.id}`;
+                const typeBadge = v ? typeBadgeColors[v.evidence_type] || 'bg-gray-800 text-gray-400 border-gray-700' : 'bg-gray-800 text-gray-400 border-gray-700';
+                const narrativeSnip = v?.narrative ? (v.narrative.length > 120 ? v.narrative.slice(0, 120) + '...' : v.narrative) : (g.representative_text || '—');
+                const dollarRange = v && v.dollar_low != null && v.dollar_high != null ? `${fmtMoney(v.dollar_low)} – ${fmtMoney(v.dollar_high)}` : '—';
+                const dollarMid = v?.dollar_mid;
+
+                const srcTypes = g.source_types || [];
+                const pubDate = g.date_earliest || g.passages?.[0]?.source_date || null;
+                const scrapedAt = g.grouped_at ? new Date(g.grouped_at).toLocaleString() : null;
+
+                // Dimension badge
+                const dimBadge = dimBadgeColors[dim] || 'bg-gray-800 text-gray-400 border-gray-700';
+                // Source badges
+                const srcBadges = srcTypes.map(s => {
+                    const cls = srcBadgeColors[s] || 'bg-gray-800 text-gray-400 border-gray-700';
+                    return `<span class="text-xs px-1.5 py-0.5 rounded border ${cls}">${s}</span>`;
+                }).join('');
+
+                // Dominant capture stage from passages
+                const passageStages = {};
+                for (const p of (g.passages || [])) {
+                    if (p.capture_stage) passageStages[p.capture_stage] = (passageStages[p.capture_stage] || 0) + 1;
+                }
+                const dominantStage = Object.entries(passageStages).sort((a,b) => b[1] - a[1])[0]?.[0] || '';
+
+                // Data attributes for filtering
+                const dataAttrs = `data-dim="${dim}" data-sources="${srcTypes.join(',')}" data-evtype="${v?.evidence_type || g.evidence_type || ''}" data-capturestage="${dominantStage}" data-dollar="${v?.dollar_high || 0}" data-date="${g.date_earliest || ''}" data-conf="${g.mean_confidence || 0}"`;
+
+                vh += `<div class="ev-group-card bg-gray-900 border border-gray-800 rounded-xl overflow-hidden" ${dataAttrs}>
+                    <!-- Summary row -->
+                    <div class="p-4 cursor-pointer hover:bg-gray-800/30 transition-colors" onclick="document.getElementById('${gId}').classList.toggle('hidden')">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 flex-wrap mb-1.5">
+                                    <span class="text-xs px-1.5 py-0.5 rounded border ${dimBadge}">${dim}</span>
+                                    ${v?.evidence_type ? `<span class="text-xs px-1.5 py-0.5 rounded border ${typeBadge}">${v.evidence_type}</span>` : (dominantStage ? `<span class="text-xs px-1.5 py-0.5 rounded border ${({'planned':'bg-blue-900/50 text-blue-400 border-blue-800','invested':'bg-amber-900/50 text-amber-400 border-amber-800','realized':'bg-green-900/50 text-green-400 border-green-800'})[dominantStage] || 'bg-gray-800 text-gray-400 border-gray-700'}">${dominantStage}</span>` : '')}
+                                    ${srcBadges}
+                                    <span class="text-xs text-gray-500">${g.passage_count || 0} passage${(g.passage_count || 0) !== 1 ? 's' : ''}</span>
+                                    ${pubDate ? `<span class="text-xs text-gray-600">${pubDate}</span>` : ''}
+                                    <span class="text-xs text-gray-600 ml-auto">click to expand</span>
+                                </div>
+                                <div class="text-sm text-gray-300 leading-relaxed">${narrativeSnip}</div>
                                 </div>
                                 <div class="text-right flex-shrink-0 space-y-1">
-                                    ${fs != null ? `<div class="font-mono text-lg font-bold" style="color:${scoreColor(fs)}">${fs.toFixed(3)}</div><div class="text-xs text-gray-600">factor score</div>` : ''}
-                                    ${dollarRange !== '—' ? `<div class="text-xs text-amber-400 font-mono">${dollarRange}</div>` : ''}
+                                    ${dollarMid != null ? `<div class="font-mono text-lg font-bold text-amber-400">${fmtMoney(dollarMid)}</div><div class="text-xs text-gray-600">dollar estimate</div>` : ''}
+                                    ${dollarRange !== '—' ? `<div class="text-xs text-gray-500 font-mono">${dollarRange}</div>` : ''}
                                 </div>
                             </div>
                         </div>
@@ -747,18 +884,14 @@
                         <!-- Expanded detail -->
                         <div id="${gId}" class="hidden border-t border-gray-800 bg-gray-950/50 p-4 space-y-4">`;
 
-                    // Factor score decomposition
+                    // Evidence quality indicators
                     if (v && v.specificity != null) {
                         vh += `<div>
-                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Factor Score Decomposition</div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Evidence Quality</div>
                             <div class="space-y-1.5">
                                 ${factorBar('Specificity', v.specificity, 1)}
-                                ${factorBar('Magnitude', v.magnitude, 1)}
-                                ${factorBar('Stage Weight', v.stage_weight, 1)}
                                 ${factorBar('Recency', v.recency, 1)}
-                            </div>
-                            <div class="text-xs text-gray-500 mt-2">
-                                ${v.specificity?.toFixed(2)} × ${v.magnitude?.toFixed(2)} × ${v.stage_weight?.toFixed(2)} × ${v.recency?.toFixed(2)} = <span class="font-bold text-gray-300">${fs?.toFixed(3)}</span>
+                                ${factorBar('Stage Weight', v.stage_weight, 1)}
                             </div>
                         </div>`;
                     }
@@ -824,11 +957,20 @@
                                 <div class="text-xs text-gray-400 italic leading-relaxed">"${p.passage_text}"</div>
                                 <div class="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-600">
                                     ${p.source_type ? `<span><span class="text-gray-500">source:</span> ${p.source_type}</span>` : ''}
-                                    ${p.source_author ? `<span><span class="text-gray-500">publisher:</span> <span class="text-gray-400">${p.source_author}</span></span>` : ''}
+                                    ${p.source_authority ? `<span class="px-1.5 py-0.5 rounded ${
+                                        p.source_authority === 'first_party_disclosure' ? 'bg-emerald-900/50 text-emerald-400' :
+                                        p.source_authority === 'first_party_public' ? 'bg-blue-900/50 text-blue-400' :
+                                        p.source_authority === 'first_party_code' ? 'bg-purple-900/50 text-purple-400' :
+                                        p.source_authority === 'professional_analysis' ? 'bg-amber-900/50 text-amber-400' :
+                                        p.source_authority === 'third_party_journalism' ? 'bg-cyan-900/50 text-cyan-400' :
+                                        'bg-gray-700 text-gray-400'
+                                    }">${p.source_authority.replace(/_/g, ' ')}</span>` : ''}
+                                    ${p.source_author ? `<span><span class="text-gray-500">author:</span> <span class="text-gray-400">${p.source_author}${p.source_author_role ? ` (${p.source_author_role})` : ''}${p.source_author_affiliation ? `, ${p.source_author_affiliation}` : ''}</span></span>` : ''}
+                                    ${p.source_publisher ? `<span><span class="text-gray-500">publisher:</span> <span class="text-gray-400">${p.source_publisher}</span></span>` : ''}
                                     ${p.source_url ? `<span><a href="${p.source_url}" target="_blank" rel="noopener" class="text-brand-500 hover:text-brand-400 underline">source link</a></span>` : ''}
                                     ${p.source_filename ? `<span><span class="text-gray-500">file:</span> ${p.source_filename}</span>` : ''}
                                     ${p.source_date ? `<span><span class="text-gray-500">published:</span> ${p.source_date}</span>` : ''}
-                                    ${pScraped ? `<span><span class="text-gray-500">scraped:</span> ${pScraped}</span>` : ''}
+                                    ${p.source_access_date ? `<span><span class="text-gray-500">accessed:</span> ${p.source_access_date}</span>` : ''}
                                     ${p.confidence != null ? `<span><span class="text-gray-500">conf:</span> ${(p.confidence * 100).toFixed(0)}%</span>` : ''}
                                     ${p.capture_stage ? `<span class="px-1.5 py-0.5 rounded bg-gray-700">${p.capture_stage}</span>` : ''}
                                 </div>
@@ -859,6 +1001,7 @@
 
                     // Metadata footer
                     const valuedAt = v?.valued_at ? new Date(v.valued_at).toLocaleString() : null;
+                    const srcLabel = srcTypes.join(', ');
                     vh += `<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-700 border-t border-gray-800/50 pt-2 mt-2">
                         ${srcLabel ? `<span>Source: ${srcLabel}</span>` : ''}
                         ${pubDate ? `<span>Published: ${pubDate}</span>` : ''}
@@ -868,42 +1011,156 @@
                     </div>`;
 
                     vh += `</div></div>`;
-                }
-                vh += `</div></div>`;
-            });
+            }
+            vh += `</div>`;
 
             console.log('[val] setting innerHTML, length:', vh.length);
             container.innerHTML = vh;
             console.log('[val] done!');
 
+            // Annotate capture scores and render evidence quality summary
+            // capture scores section removed
+            renderEvidenceQuality(vData);
+
         } catch (e) {
             console.error('Failed to load valuations:', e);
-            const errHtml = `<div class="bg-red-900/30 border border-red-800 rounded-xl p-4 mb-4 text-sm text-red-300">
-                <strong>Valuation viewer error:</strong> ${e.message}
-                <pre class="text-xs mt-2 text-red-400 whitespace-pre-wrap">${e.stack}</pre>
-            </div>`;
-            container.insertAdjacentHTML('afterbegin', errHtml);
+            container.innerHTML = '';
+            if (e.name === 'AbortError') {
+                container.innerHTML = '<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8 text-center text-gray-500">Couldn\'t find any valuations.</div>';
+            } else {
+                container.innerHTML = `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8 text-center text-gray-500">Couldn't find any valuations.</div>`;
+            }
             renderLegacyEvidence(container);
         }
     }
 
-    function switchDimTab(dim) {
-        // Update tab buttons
-        document.querySelectorAll('#dim-tabs button').forEach(btn => {
-            const btnDim = btn.dataset.dim;
-            const isActive = btnDim === dim;
-            const tabColor = dimTabColors[btnDim] || 'border-gray-500 text-gray-400';
-            const tabBg = dimTabBg[btnDim] || 'bg-gray-800/30';
-            if (isActive) {
-                btn.className = `px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tabColor} ${tabBg}`;
-            } else {
-                btn.className = 'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors border-transparent text-gray-500 hover:text-gray-300';
+
+    function renderEvidenceQuality(vData) {
+        const container = document.getElementById('evidence-quality-summary');
+        if (!container || !vData || !vData.dimensions) return;
+
+        const dims = vData.dimensions;
+        const dimKeys = Object.keys(dims);
+        if (dimKeys.length === 0) return;
+
+        // Aggregate stats across all groups
+        let totalSpec = 0, totalRec = 0, groupCount = 0;
+        for (const dim of dimKeys) {
+            const dd = dims[dim];
+            for (const g of (dd.groups || [])) {
+                if (g.valuation) {
+                    totalSpec += g.valuation.specificity || 0;
+                    totalRec += g.valuation.recency || 0;
+                    groupCount++;
+                }
             }
-        });
-        // Show/hide panels
-        document.querySelectorAll('.dim-panel').forEach(p => {
-            p.classList.toggle('hidden', p.id !== `dim-panel-${dim}`);
-        });
+        }
+        const avgSpec = groupCount > 0 ? totalSpec / groupCount : 0;
+        const avgRec = groupCount > 0 ? totalRec / groupCount : 0;
+
+        const tc = vData.type_counts || {};
+
+        // Mini bar helper
+        const miniBar = (label, value) => {
+            const pct = Math.min(value * 100, 100);
+            const color = value >= 0.5 ? '#22c55e' : value >= 0.3 ? '#eab308' : '#ef4444';
+            return `<div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500 w-24 flex-shrink-0">${label}</span>
+                <div class="flex-1 h-2 bg-gray-800 rounded overflow-hidden"><div class="h-full rounded" style="width:${pct}%;background:${color}"></div></div>
+                <span class="text-xs font-mono w-10 text-right" style="color:${color}">${value.toFixed(2)}</span>
+            </div>`;
+        };
+
+        let qh = `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <h3 class="font-semibold mb-4 text-gray-300">Evidence Quality Summary</h3>
+
+            <div class="grid md:grid-cols-2 gap-6">
+                <div>
+                    <div class="text-xs text-gray-500 uppercase tracking-wide mb-2 font-semibold">Pipeline</div>
+                    <div class="flex items-center gap-2 text-sm text-gray-300 mb-3">
+                        <span class="font-mono text-gray-200">${vData.total_passages}</span> passages
+                        <span class="text-gray-600">&rarr;</span>
+                        <span class="font-mono text-gray-200">${vData.total_groups}</span> groups
+                        <span class="text-gray-600">&rarr;</span>
+                        <span class="font-mono text-gray-200">${dimKeys.length}</span> dimensions
+                    </div>
+
+                    <div class="text-xs text-gray-500 uppercase tracking-wide mb-2 font-semibold">Stage Breakdown</div>
+                    <div class="flex items-center gap-2 mb-4">
+                        ${tc.plan ? `<span class="text-xs px-2 py-0.5 rounded border bg-blue-900/50 text-blue-400 border-blue-800">${tc.plan} plan</span>` : ''}
+                        ${tc.investment ? `<span class="text-xs px-2 py-0.5 rounded border bg-amber-900/50 text-amber-400 border-amber-800">${tc.investment} investment</span>` : ''}
+                        ${tc.capture ? `<span class="text-xs px-2 py-0.5 rounded border bg-green-900/50 text-green-400 border-green-800">${tc.capture} capture</span>` : ''}
+                        ${!tc.plan && !tc.investment && !tc.capture ? '<span class="text-xs text-gray-600">No stage data</span>' : ''}
+                    </div>
+
+                    <div class="text-xs text-gray-500 uppercase tracking-wide mb-2 font-semibold">Quality Indicators</div>
+                    <div class="space-y-2">
+                        ${miniBar('Avg Specificity', avgSpec)}
+                        ${miniBar('Avg Recency', avgRec)}
+                    </div>
+                </div>
+
+                <div>
+                    <div class="text-xs text-gray-500 uppercase tracking-wide mb-2 font-semibold">Per-Dimension Breakdown</div>
+                    <table class="w-full text-xs">
+                        <thead><tr class="border-b border-gray-800">
+                            <th class="text-left py-1.5 text-gray-500 font-medium">Dimension</th>
+                            <th class="text-right py-1.5 text-gray-500 font-medium">Groups</th>
+                            <th class="text-right py-1.5 text-gray-500 font-medium">Stage Mix</th>
+                            <th class="text-right py-1.5 text-gray-500 font-medium">$ Evidence</th>
+                        </tr></thead>
+                        <tbody>`;
+
+        const dimDisplayColors = { cost: 'text-green-400', revenue: 'text-purple-400', general: 'text-yellow-400' };
+        let totalEvidenceDollars = 0;
+        for (const dim of dimKeys) {
+            const dd = dims[dim];
+            const gc = dd.group_count || (dd.groups || []).length;
+            const dollarEst = dd.potential_usd != null ? fmtMoney(dd.potential_usd) : (dd.actual_usd != null ? fmtMoney(dd.actual_usd) : '—');
+            totalEvidenceDollars += dd.potential_usd || dd.actual_usd || 0;
+            // Stage mix: count plan/invest/capture groups
+            const stageMap = {};
+            for (const g of (dd.groups || [])) {
+                const et = g.evidence_type || g.valuation?.evidence_type || '?';
+                stageMap[et] = (stageMap[et] || 0) + 1;
+            }
+            const stageParts = [];
+            if (stageMap.plan) stageParts.push(`${stageMap.plan}P`);
+            if (stageMap.investment) stageParts.push(`${stageMap.investment}I`);
+            if (stageMap.capture) stageParts.push(`${stageMap.capture}C`);
+            const stageMix = stageParts.length > 0 ? stageParts.join('/') : '—';
+            const dimColor = dimDisplayColors[dim] || 'text-gray-400';
+            qh += `<tr class="border-b border-gray-800/50">
+                <td class="py-1.5 ${dimColor} font-medium capitalize">${dim}</td>
+                <td class="py-1.5 text-right font-mono text-gray-300">${gc}</td>
+                <td class="py-1.5 text-right font-mono text-gray-400">${stageMix}</td>
+                <td class="py-1.5 text-right font-mono text-amber-400">${dollarEst}</td>
+            </tr>`;
+        }
+
+        qh += `</tbody></table>
+                </div>
+            </div>
+        </div>`;
+
+        container.innerHTML = qh;
+
+        // Enrich hero card evidence basis line with per-stage dollar breakdowns
+        const heroBasis = document.getElementById('hero-evidence-basis');
+        if (heroBasis && totalEvidenceDollars > 0) {
+            const fmtD2 = v => {
+                if (v == null || v === 0) return '$0';
+                if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+                if (v >= 1e6) return '$' + (v / 1e6).toFixed(0) + 'M';
+                if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+                return '$' + Math.round(v).toLocaleString();
+            };
+            const parts = [];
+            if (tc.plan) parts.push(`plan: ${fmtD2(vData.plan_dollars || 0)} (${tc.plan})`);
+            if (tc.investment) parts.push(`invest: ${fmtD2(vData.investment_dollars || 0)} (${tc.investment})`);
+            if (tc.capture) parts.push(`capture: ${fmtD2(vData.capture_dollars || 0)} (${tc.capture})`);
+            heroBasis.innerHTML = `Evidence basis: ${fmtD2(totalEvidenceDollars)} across ${vData.total_groups} groups &mdash; ${parts.join(' | ')}`;
+        }
     }
 
     function renderLegacyEvidence(container) {
@@ -927,13 +1184,26 @@
         for (const ev of allEvidence.slice(0, 30)) {
             const dim = ev.target_dimension || 'general';
             const stageClass = stageColors[ev.capture_stage] || 'bg-gray-800 text-gray-400';
+            const srcTickerBadge = ev.source_ticker && ev.source_ticker !== data.ticker
+                ? `<span class="text-xs px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-400 border border-amber-800" title="Evidence from secondary listing ${ev.source_ticker}">via ${ev.source_ticker}</span>`
+                : '';
             h += `<div class="bg-gray-900 border-l-4 ${dimColors[dim] || 'border-gray-600'} rounded-r-lg p-4">
                 <div class="flex items-center gap-2 flex-wrap mb-1">
                     <span class="text-sm font-medium text-gray-200">${ev.evidence_type}${ev.subtype && ev.subtype !== ev.evidence_type ? ' / ' + ev.subtype : ''}</span>
                     ${ev.capture_stage ? `<span class="text-xs px-2 py-0.5 rounded ${stageClass}">${ev.capture_stage}</span>` : ''}
+                    ${srcTickerBadge}
                     ${ev.score_contribution != null ? `<span class="ml-auto font-mono text-xs" style="color:${scoreColor(ev.score_contribution)}">${ev.score_contribution.toFixed(3)}</span>` : ''}
                 </div>
-                <div class="text-xs text-gray-400">${ev.source_name || '—'} ${ev.source_excerpt ? '— "' + (ev.source_excerpt.length > 150 ? ev.source_excerpt.slice(0, 150) + '...' : ev.source_excerpt) + '"' : ''}</div>
+                <div class="text-xs text-gray-400">
+                    ${ev.source_name || '—'}
+                    ${ev.source_publisher ? ` <span class="text-gray-500">via</span> ${ev.source_publisher}` : ''}
+                    ${ev.source_authority ? ` <span class="px-1 py-0.5 rounded text-[10px] ${
+                        ev.source_authority === 'first_party_disclosure' ? 'bg-emerald-900/40 text-emerald-500' :
+                        ev.source_authority === 'first_party_public' ? 'bg-blue-900/40 text-blue-500' :
+                        'bg-gray-800 text-gray-500'
+                    }">${ev.source_authority.replace(/_/g, ' ')}</span>` : ''}
+                    ${ev.source_excerpt ? '— "' + (ev.source_excerpt.length > 150 ? ev.source_excerpt.slice(0, 150) + '...' : ev.source_excerpt) + '"' : ''}
+                </div>
             </div>`;
         }
         if (allEvidence.length > 30) {
@@ -941,6 +1211,992 @@
         }
         h += '</div></div>';
         container.insertAdjacentHTML('beforeend', h);
+    }
+
+    // ── Company Info (per-field inline editing) ────────────────────
+
+    async function loadCompanyLinks(ticker) {
+        const container = document.getElementById('company-links-section');
+        if (!container) return;
+
+        try {
+            const resp = await fetch(`/api/companies/${ticker}/links`);
+            const data = await resp.json();
+            if (data.error) { container.innerHTML = ''; return; }
+
+            window._companyRecord = data;
+            renderCompanyInfo(container, data);
+        } catch (e) {
+            console.error('Failed to load company info:', e);
+            container.innerHTML = '';
+        }
+    }
+
+    const _companyFieldDefs = [
+        { key: 'company_name', label: 'Company Name', type: 'text' },
+        { key: 'ticker', label: 'Ticker', type: 'text' },
+        { key: 'slug', label: 'Slug', type: 'text', readonly: true },
+        { key: 'exchange', label: 'Exchange', type: 'text' },
+        { key: 'sector', label: 'Sector', type: 'text' },
+        { key: 'industry', label: 'Industry', type: 'text' },
+        { key: 'github_url', label: 'GitHub', type: 'url', icon: '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>' },
+        { key: 'careers_url', label: 'Careers', type: 'url', icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>' },
+        { key: 'ir_url', label: 'Investor Relations', type: 'url', icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>' },
+        { key: 'blog_url', label: 'Blog / Newsroom', type: 'url', icon: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>' },
+    ];
+
+    function renderCompanyInfo(container, record) {
+        let lh = `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <h3 class="font-semibold text-gray-300 mb-4">Company Information</h3>
+            <div class="space-y-2">`;
+
+        for (const def of _companyFieldDefs) {
+            const val = record[def.key] || '';
+            const hasVal = !!val;
+            const iconHtml = def.icon ? `<div class="${hasVal ? 'text-gray-400' : 'text-gray-700'} flex-shrink-0 w-5">${def.icon}</div>` : '';
+            const isUrl = def.type === 'url' && hasVal;
+
+            lh += `<div class="flex items-center gap-3 group py-1" id="field-row-${def.key}">
+                ${iconHtml}
+                <span class="text-xs text-gray-500 ${def.icon ? 'w-28' : 'w-[136px]'} flex-shrink-0">${def.label}</span>
+                <div class="flex-1 min-w-0" id="field-display-${def.key}">`;
+            if (isUrl) {
+                lh += `<a href="${val}" target="_blank" rel="noopener" class="text-sm text-brand-400 hover:text-brand-300 truncate block transition-colors">${val}</a>`;
+            } else if (hasVal) {
+                lh += `<span class="text-sm text-gray-200">${val}</span>`;
+            } else {
+                lh += `<span class="text-xs text-gray-600 italic">Not set</span>`;
+            }
+            lh += `</div>`;
+            if (!def.readonly) {
+                lh += `<button onclick="editField('${def.key}')" class="text-xs text-gray-600 hover:text-gray-300 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0 px-1.5 py-0.5 rounded hover:bg-gray-800" title="Edit ${def.label}">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                </button>`;
+            }
+            lh += `</div>`;
+        }
+
+        // ── Subsidiaries subsection ──────────────────────────────
+        const subs = window._subsidiaries || [];
+        const parents = window._parentCompanies || [];
+        if (parents.length > 0) {
+            lh += `<div class="pt-3 mt-3 border-t border-gray-800">
+                <div class="text-xs text-gray-500 uppercase tracking-wide mb-2 font-semibold">Parent Company</div>`;
+            for (const p of parents) {
+                const pLabel = p.ticker || p.slug;
+                const pctStr = p.ownership_pct != null ? `${(p.ownership_pct * 100).toFixed(0)}% ownership` : '';
+                lh += `<div class="flex items-center gap-3 py-1">
+                    <a href="/company/${pLabel}?token=${AUTH_TOKEN}" class="text-sm text-brand-400 hover:text-brand-300 transition-colors">${p.company_name || pLabel}</a>
+                    <span class="text-xs text-gray-600">${pLabel}</span>
+                    ${pctStr ? `<span class="text-xs text-gray-500">${pctStr}</span>` : ''}
+                    <span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-500">${p.relationship_type || 'subsidiary'}</span>
+                </div>`;
+            }
+            lh += `</div>`;
+        }
+        if (subs.length > 0) {
+            lh += `<div class="pt-3 mt-3 border-t border-gray-800">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Subsidiaries & Ventures (${subs.length})</span>
+                    <button id="run-all-subs-btn" onclick="showRunMenu(this, (force) => runAllSubsidiaryPipelines(force))" class="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-xs font-semibold transition-colors">Run Whole Pipeline</button>
+                </div>`;
+            for (const sub of subs) {
+                const subLabel = sub.ticker || sub.slug;
+                const subUrl = `/company/${subLabel}?token=${AUTH_TOKEN}`;
+                const pctStr = sub.ownership_pct != null ? `${(sub.ownership_pct * 100).toFixed(0)}%` : '';
+                const typeLabel = sub.relationship_type !== 'subsidiary' ? sub.relationship_type.replace(/_/g, ' ') : '';
+                const pipePct = sub.pipeline_pct != null ? sub.pipeline_pct : 0;
+
+                // Progress bar color
+                const pipeColor = pipePct >= 100 ? '#22c55e' : pipePct >= 50 ? '#eab308' : pipePct > 0 ? '#f97316' : '#4b5563';
+
+                // Last checked
+                let lastCheckedStr = 'Never';
+                if (sub.last_checked) {
+                    const d = new Date(sub.last_checked);
+                    const ago = Date.now() - d.getTime();
+                    if (ago < 3600000) lastCheckedStr = Math.round(ago / 60000) + 'm ago';
+                    else if (ago < 86400000) lastCheckedStr = Math.round(ago / 3600000) + 'h ago';
+                    else lastCheckedStr = Math.round(ago / 86400000) + 'd ago';
+                } else if (sub.created_at) {
+                    lastCheckedStr = 'Created ' + new Date(sub.created_at).toLocaleDateString();
+                }
+
+                // Score display
+                let scoreHtml = '';
+                if (sub.has_scores && sub.latest_score) {
+                    scoreHtml = `<div class="flex items-center gap-2">
+                        <div class="text-center">
+                            <div class="text-xs text-gray-500">Opp</div>
+                            <div class="text-sm font-mono font-semibold" style="color:${scoreColor(sub.latest_score.opportunity)}">${fmtScore(sub.latest_score.opportunity)}</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-xs text-gray-500">Real</div>
+                            <div class="text-sm font-mono font-semibold" style="color:${scoreColor(sub.latest_score.realization)}">${fmtScore(sub.latest_score.realization)}</div>
+                        </div>
+                        ${sub.latest_score.quadrant_label ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">${sub.latest_score.quadrant_label}</span>` : ''}
+                    </div>`;
+                } else {
+                    scoreHtml = `<span class="text-xs text-gray-600">Not scored</span>`;
+                }
+
+                // Industry label
+                const industryStr = sub.industry || sub.sector || '';
+
+                // Pipeline milestone icons
+                const mile = (done, label) => done
+                    ? `<span class="text-green-500" title="${label}">&#10003;</span>`
+                    : `<span class="text-gray-700" title="${label}">&#10005;</span>`;
+
+                lh += `<div class="py-3 px-4 rounded-lg bg-gray-800/30 hover:bg-gray-800/60 transition-colors mb-2 border border-gray-800/50">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2 mb-1">
+                                <a href="${subUrl}" class="text-sm font-medium text-brand-400 hover:text-brand-300 truncate transition-colors">${sub.company_name || subLabel}</a>
+                                ${sub.ticker ? `<span class="text-xs text-gray-500 font-mono">${sub.ticker}</span>` : ''}
+                                ${typeLabel ? `<span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-500">${typeLabel}</span>` : ''}
+                                ${pctStr ? `<span class="text-xs text-gray-600">${pctStr} owned</span>` : ''}
+                            </div>
+                            ${industryStr ? `<div class="text-xs text-gray-500 mb-1.5">${industryStr}</div>` : ''}
+                            <div class="flex items-center gap-3 text-xs">
+                                <div class="flex items-center gap-1.5">
+                                    <div class="w-16 h-1.5 rounded-full bg-gray-700 overflow-hidden">
+                                        <div class="h-full rounded-full transition-all" style="width:${pipePct}%;background:${pipeColor}"></div>
+                                    </div>
+                                    <span class="text-gray-500">${pipePct}%</span>
+                                </div>
+                                <span class="flex items-center gap-1 text-xs" title="Links / Evidence / Groups / Scores">
+                                    ${mile(sub.has_links, 'Links')}${mile(sub.has_evidence, 'Evidence')}${mile(sub.has_groups, 'Groups')}${mile(sub.has_scores, 'Scores')}
+                                </span>
+                                <span class="text-gray-600">${lastCheckedStr}</span>
+                            </div>
+                        </div>
+                        <div class="flex flex-col items-end gap-2 flex-shrink-0">
+                            ${scoreHtml}
+                            <div class="flex items-center gap-2">
+                                <button onclick="event.stopPropagation(); showRunMenu(this, (force) => runSubPipeline('${subLabel}', this, force))" class="px-2 py-1 text-xs text-gray-500 hover:text-brand-400 rounded border border-gray-700 hover:border-brand-600 transition-colors">&#9654; Run</button>
+                                <a href="${subUrl}" class="text-xs text-gray-500 hover:text-brand-400 transition-colors">View &rarr;</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+            lh += `</div>`;
+        }
+
+        if (record.updated_at) {
+            lh += `<div class="pt-2 mt-2 border-t border-gray-800">
+                <span class="text-xs text-gray-600">Last updated: ${new Date(record.updated_at).toLocaleString()}</span>
+            </div>`;
+        }
+
+        lh += `</div></div>`;
+        container.innerHTML = lh;
+    }
+
+    function editField(key) {
+        const record = window._companyRecord;
+        const def = _companyFieldDefs.find(d => d.key === key);
+        if (!def || def.readonly) return;
+
+        const displayEl = document.getElementById(`field-display-${key}`);
+        const rowEl = document.getElementById(`field-row-${key}`);
+        if (!displayEl) return;
+
+        const currentVal = record[key] || '';
+
+        // Replace the display + edit button with an inline input + save/cancel
+        const inputType = def.type === 'url' ? 'url' : 'text';
+        const placeholder = def.type === 'url' ? 'https://...' : def.label;
+
+        // Hide the edit button
+        const editBtn = rowEl.querySelector('button');
+        if (editBtn) editBtn.style.display = 'none';
+
+        displayEl.innerHTML = `<div class="flex items-center gap-2">
+            <input type="${inputType}" id="field-input-${key}" value="${currentVal.replace(/"/g, '&quot;')}"
+                placeholder="${placeholder}"
+                class="flex-1 bg-gray-800 border border-gray-700 rounded px-2.5 py-1 text-sm text-gray-200 placeholder-gray-600 focus:border-brand-600 focus:outline-none transition-colors"
+                onkeydown="if(event.key==='Enter')saveField('${key}');if(event.key==='Escape')cancelField('${key}')">
+            <button onclick="saveField('${key}')" class="text-xs px-2 py-1 rounded bg-brand-600 text-white hover:bg-brand-700 transition-colors">Save</button>
+            <button onclick="cancelField('${key}')" class="text-xs px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
+        </div>`;
+
+        // Focus the input
+        const input = document.getElementById(`field-input-${key}`);
+        if (input) { input.focus(); input.select(); }
+    }
+
+    function cancelField(key) {
+        const container = document.getElementById('company-links-section');
+        renderCompanyInfo(container, window._companyRecord);
+    }
+
+    async function saveField(key) {
+        const input = document.getElementById(`field-input-${key}`);
+        if (!input) return;
+
+        const newVal = input.value.trim();
+        const oldVal = window._companyRecord[key] || '';
+        if (newVal === oldVal) { cancelField(key); return; }
+
+        const payload = {};
+        payload[key] = newVal || null;
+
+        // Show saving state
+        input.disabled = true;
+        const saveBtn = input.parentElement.querySelector('button');
+        if (saveBtn) saveBtn.textContent = '...';
+
+        try {
+            const resp = await fetch(`/api/companies/${TICKER}/links`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const record = await resp.json();
+            if (record.error) {
+                alert('Error: ' + record.error);
+                input.disabled = false;
+                if (saveBtn) saveBtn.textContent = 'Save';
+                return;
+            }
+
+            window._companyRecord = record;
+            const container = document.getElementById('company-links-section');
+            renderCompanyInfo(container, record);
+
+            // Refresh pipeline status since links may affect stages
+            loadPipelineStatus(TICKER);
+        } catch (e) {
+            console.error('Failed to save field:', e);
+            alert('Failed to save: ' + e.message);
+            input.disabled = false;
+            if (saveBtn) saveBtn.textContent = 'Save';
+        }
+    }
+
+    async function loadPipelineStatus(ticker) {
+        const container = document.getElementById('pipeline-status-section');
+        if (!container) return;
+
+        try {
+            const resp = await fetch(`/api/companies/${ticker}/pipeline-status`);
+            const data = await resp.json();
+            if (data.error || !data.stages) { container.innerHTML = ''; return; }
+
+            const stages = data.stages;
+            const stageOrder = await _pipelineStagesPromise;
+
+            const stageIcons = {
+                discover_links: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>',
+                collect_news: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>',
+                collect_github: '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>',
+                collect_analysts: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+                collect_web_enrichment: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+                extract_filings: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+                extract_news: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+                extract_unified: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+                value_evidence: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                score: '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            };
+
+            const stageTooltips = {
+                discover_links: 'Finds the company\'s GitHub org, careers page, investor relations page, and blog. These URLs feed subsequent collection stages.',
+                collect_news: 'Searches for recent AI-related news, product launches, and press releases about the company over the last 6 months.',
+                collect_github: 'Retrieves the company\'s public GitHub activity: total repos, AI/ML repos, star counts, top repositories, and languages used.',
+                collect_analysts: 'Gathers Wall Street analyst consensus: buy/hold/sell recommendation, price targets, and number of analysts covering the stock.',
+                collect_web_enrichment: 'Reads the company\'s careers, IR, and blog pages to extract AI-related evidence passages classified by target dimension and capture stage.',
+                extract_filings: 'Analyzes SEC 10-K and 10-Q filings to identify AI-related passages, classifying each by cost/revenue target and plan/invest/capture stage with confidence scores.',
+                extract_news: 'Extracts AI-related evidence from news articles, classifying by dimension and capture stage.',
+                extract_unified: 'Groups all collected evidence passages into semantically similar clusters. Each group receives a representative summary, dimension label, and date range.',
+                value_evidence: 'Two-pass valuation: first pass assigns dollar ranges, evidence type (plan/investment/capture), and factor scores (specificity, magnitude, stage weight, recency) per group. Second pass cross-references groups for consistency.',
+                score: 'Aggregates all evidence into company-level scores: cost/revenue opportunity (from BLS workforce data), cost/revenue capture (from evidence), ROI metrics, quadrant assignment, and the AI Index expected-value calculation.',
+            };
+
+            const doneCount = stageOrder.filter(k => stages[k]?.done).length;
+            const emptyCount = stageOrder.filter(k => stages[k]?.checked_empty).length;
+            const totalCount = stageOrder.length;
+
+            let ph = `<div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-semibold text-gray-300">Pipeline Status</h3>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs text-gray-500">${doneCount}/${totalCount} stages complete</span>
+                        <button id="run-whole-pipeline-btn" onclick="showRunMenu(this, (force) => runWholePipeline(force))" class="px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-xs font-semibold transition-colors">Run Whole Pipeline</button>
+                    </div>
+                </div>
+                <div class="w-full bg-gray-800 rounded-full h-2 mb-5">
+                    <div class="h-2 rounded-full transition-all" style="width:${(doneCount/totalCount*100).toFixed(0)}%;background:${doneCount === totalCount ? '#22c55e' : '#6366f1'}"></div>
+                </div>
+                <div class="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-3">`;
+
+            for (const key of stageOrder) {
+                const st = stages[key];
+                if (!st) continue;
+                const done = st.done;
+                const checkedEmpty = st.checked_empty;
+                const stale = st.stale;
+                const icon = stageIcons[key] || '';
+                const tooltip = stageTooltips[key] || '';
+                const countLabel = st.count != null && st.count > 0 ? st.count : '';
+                const dateLabel = st.last_run ? new Date(st.last_run).toLocaleDateString() : '';
+
+                // Four states: done (green), stale/needs re-run (red/orange), checked empty (amber), not run (gray)
+                let borderColor, bgColor, iconColor, textColor, statusLabel;
+                if (stale) {
+                    borderColor = 'border-red-800/60'; bgColor = 'bg-red-900/10';
+                    iconColor = 'text-red-400/70'; textColor = 'text-gray-400';
+                    statusLabel = `<div class="text-xs text-red-400/80 mt-0.5">stale</div>`;
+                } else if (done && !checkedEmpty) {
+                    borderColor = 'border-green-800'; bgColor = 'bg-green-900/20';
+                    iconColor = 'text-green-400'; textColor = 'text-gray-300';
+                    statusLabel = '';
+                } else if (checkedEmpty) {
+                    borderColor = 'border-amber-800/50'; bgColor = 'bg-amber-900/10';
+                    iconColor = 'text-amber-500/60'; textColor = 'text-gray-400';
+                    statusLabel = `<div class="text-xs text-amber-500/70 mt-0.5">no data</div>`;
+                } else {
+                    borderColor = 'border-gray-700'; bgColor = 'bg-gray-800/30';
+                    iconColor = 'text-gray-600'; textColor = 'text-gray-500';
+                    statusLabel = '';
+                }
+
+                // Build detail line for discover_links
+                let detailHtml = '';
+                if (key === 'discover_links' && st.detail) {
+                    const linkNames = { github_url: 'GitHub', careers_url: 'Careers', ir_url: 'IR', blog_url: 'Blog' };
+                    const found = Object.entries(st.detail).filter(([,v]) => v).map(([k]) => linkNames[k] || k);
+                    const missing = Object.entries(st.detail).filter(([,v]) => !v).map(([k]) => linkNames[k] || k);
+                    detailHtml = '';
+                    if (found.length > 0) detailHtml += `<div class="text-xs text-green-600 mt-1 leading-tight">${found.join(', ')}</div>`;
+                    if (missing.length > 0) detailHtml += `<div class="text-xs text-gray-600 mt-0.5 leading-tight line-through">${missing.join(', ')}</div>`;
+                }
+
+                // Summary for checked-empty stages
+                if (st.summary) {
+                    detailHtml += `<div class="text-xs text-amber-600/70 mt-0.5 leading-tight">${st.summary}</div>`;
+                }
+
+                // Unscored evidence badge for score stage
+                if (key === 'score' && st.unscored_evidence > 0) {
+                    detailHtml += `<div class="text-xs text-amber-400 font-medium mt-0.5">${st.unscored_evidence} unscored</div>`;
+                    borderColor = 'border-amber-600/60';
+                }
+
+                ph += `<div class="pipeline-tip flex flex-col items-center text-center p-2 rounded-lg border ${borderColor} ${bgColor} cursor-pointer hover:border-brand-600 hover:bg-brand-900/10 transition-colors group" onclick="showRunMenu(this, (force) => runStage('${key}', force))" title="Click to run">
+                    <div class="tip-text">${tooltip}</div>
+                    <div class="${iconColor} mb-1 group-hover:text-brand-400 transition-colors">${icon}</div>
+                    <div class="text-xs font-medium ${textColor} leading-tight">${st.label}</div>
+                    ${countLabel ? `<div class="text-xs font-mono ${done && !checkedEmpty ? 'text-green-500' : 'text-gray-600'} mt-0.5">${countLabel}</div>` : ''}
+                    ${statusLabel}
+                    ${dateLabel ? `<div class="text-xs text-gray-600 mt-0.5">${dateLabel}</div>` : ''}
+                    ${detailHtml}
+                    <div class="text-xs text-gray-700 group-hover:text-brand-400 mt-1 transition-colors">&#9654; Run</div>
+                </div>`;
+            }
+
+            ph += `</div></div>`;
+            container.innerHTML = ph;
+
+            // Disable buttons for stages that are already running
+            _applyRunningStageOverlay();
+
+            // Populate rescore indicator if there are unscored evidence groups
+            const rescoreEl = document.getElementById('rescore-indicator');
+            if (rescoreEl) {
+                const unscoredCount = stages.score?.unscored_evidence || 0;
+                if (unscoredCount > 0) {
+                    rescoreEl.innerHTML = `<div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                            <span class="text-sm text-amber-300">${unscoredCount} evidence group${unscoredCount === 1 ? '' : 's'} not yet scored</span>
+                        </div>
+                        <button onclick="showRunMenu(this, (force) => runStage('score', force))" class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-lg transition-colors">Re-score Now</button>
+                    </div>`;
+                } else {
+                    rescoreEl.innerHTML = '';
+                }
+            }
+        } catch (e) {
+            console.error('Failed to load pipeline status:', e);
+            container.innerHTML = '';
+        }
+    }
+
+    function toggleEvidenceFilter(btn) {
+        const key = btn.dataset.filterKey;
+        const value = btn.dataset.filterValue;
+        // Toggle this button
+        const wasActive = btn.classList.contains('ev-filter-active');
+
+        // Deactivate all buttons in same row (single-select per filter key)
+        btn.parentElement.querySelectorAll(`.ev-filter-btn[data-filter-key="${key}"]`).forEach(b => {
+            b.classList.remove('ev-filter-active', 'border-brand-600', 'text-brand-400');
+            b.classList.add('border-gray-700', 'text-gray-500');
+        });
+
+        if (!wasActive) {
+            btn.classList.add('ev-filter-active', 'border-brand-600', 'text-brand-400');
+            btn.classList.remove('border-gray-700', 'text-gray-500');
+            window._evidenceFilters[key] = value;
+        } else {
+            window._evidenceFilters[key] = null;
+        }
+        applyEvidenceFilters();
+    }
+
+    function applyEvidenceFilters() {
+        const filters = window._evidenceFilters;
+        const sortVal = document.getElementById('ev-sort-select')?.value || 'date_newest';
+        const cards = document.querySelectorAll('.ev-group-card');
+        let visible = 0;
+
+        // Collect cards and their sort keys
+        const cardData = [];
+        cards.forEach(card => {
+            const dim = card.dataset.dim;
+            const sources = card.dataset.sources.split(',').filter(Boolean);
+            const evType = card.dataset.evtype;
+
+            const captureStage = card.dataset.capturestage;
+
+            let show = true;
+            if (filters.source && !sources.includes(filters.source)) show = false;
+            if (filters.dimension && dim !== filters.dimension) show = false;
+            if (filters.evType && evType !== filters.evType) show = false;
+            if (filters.captureStage && captureStage !== filters.captureStage) show = false;
+
+            card.style.display = show ? '' : 'none';
+            if (show) visible++;
+
+            let sortKey = 0;
+            if (sortVal === 'dollar_high') sortKey = parseFloat(card.dataset.dollar) || 0;
+            else if (sortVal === 'date_newest') sortKey = card.dataset.date || '';
+            else if (sortVal === 'date_oldest') sortKey = card.dataset.date || '';
+            else if (sortVal === 'confidence') sortKey = parseFloat(card.dataset.conf) || 0;
+
+            cardData.push({ card, sortKey, show });
+        });
+
+        // Sort visible cards
+        const parent = document.getElementById('ev-groups-list');
+        if (parent) {
+            const desc = sortVal !== 'date_oldest';
+            cardData.sort((a, b) => {
+                if (typeof a.sortKey === 'string') {
+                    return desc ? b.sortKey.localeCompare(a.sortKey) : a.sortKey.localeCompare(b.sortKey);
+                }
+                return desc ? b.sortKey - a.sortKey : a.sortKey - b.sortKey;
+            });
+            for (const { card } of cardData) {
+                parent.appendChild(card);
+            }
+        }
+
+        // Update count label
+        const label = document.getElementById('ev-count-label');
+        if (label) label.textContent = `${visible} of ${cards.length} groups`;
+    }
+
+    const _queuedStages = new Set();
+
+    async function _applyRunningStageOverlay() {
+        const stageOrder = await _pipelineStagesPromise;
+        const cells = document.querySelectorAll('#pipeline-status-section .pipeline-tip');
+        cells.forEach((cell, idx) => {
+            const key = stageOrder[idx];
+            if (!key) return;
+            const isRunning = _runningStages.has(key);
+            const isQueued = _queuedStages.has(key);
+            const runBtn = cell.querySelector('div:last-child');
+            if (isRunning || isQueued) {
+                cell.style.pointerEvents = 'none';
+                cell.style.opacity = '0.6';
+                if (runBtn) {
+                    if (isRunning) {
+                        runBtn.innerHTML = '<span class="loader" style="width:12px;height:12px;border-width:2px"></span> Running';
+                        runBtn.classList.add('text-blue-400');
+                        runBtn.classList.remove('text-yellow-400');
+                    } else {
+                        runBtn.innerHTML = '&#9202; Enqueued';
+                        runBtn.classList.add('text-yellow-400');
+                        runBtn.classList.remove('text-blue-400');
+                    }
+                }
+            } else {
+                cell.style.pointerEvents = '';
+                cell.style.opacity = '';
+                if (runBtn) {
+                    runBtn.innerHTML = '&#9654; Run';
+                    runBtn.classList.remove('text-blue-400', 'text-yellow-400');
+                }
+            }
+        });
+    }
+
+    function showRunMenu(anchorEl, onSelect) {
+        // Remove any existing menu
+        document.getElementById('run-mode-menu')?.remove();
+
+        const menu = document.createElement('div');
+        menu.id = 'run-mode-menu';
+        menu.className = 'absolute z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[200px]';
+        menu.innerHTML = `
+            <button class="w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-brand-600/20 hover:text-brand-300 flex items-center gap-2" data-force="false">
+                <span>▶</span> Run Incremental
+                <span class="ml-auto text-xs text-gray-500">new data only</span>
+            </button>
+            <button class="w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-brand-600/20 hover:text-brand-300 flex items-center gap-2" data-force="true">
+                <span>⟳</span> Run From Scratch
+                <span class="ml-auto text-xs text-gray-500">all dates</span>
+            </button>
+        `;
+
+        // Position below anchor
+        const rect = anchorEl.getBoundingClientRect();
+        menu.style.position = 'fixed';
+        menu.style.top = rect.bottom + 4 + 'px';
+        menu.style.left = rect.left + 'px';
+
+        // Handle selection
+        menu.querySelectorAll('button').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const force = btn.dataset.force === 'true';
+                menu.remove();
+                onSelect(force);
+            };
+        });
+
+        document.body.appendChild(menu);
+
+        // Dismiss on outside click or Escape
+        const dismiss = (e) => {
+            if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', dismiss); }
+        };
+        setTimeout(() => document.addEventListener('click', dismiss), 0);
+        document.addEventListener('keydown', function esc(e) {
+            if (e.key === 'Escape') { menu.remove(); document.removeEventListener('keydown', esc); }
+        });
+    }
+
+    async function runStage(stage, force = false) {
+        // Prevent running if already running or queued
+        if (_queuedStages.has(stage) || _runningStages.has(stage)) return;
+
+        // Visual feedback: find the clicked cell and show spinner
+        const cells = document.querySelectorAll('#pipeline-status-section .pipeline-tip');
+        const stageOrder = await _pipelineStagesPromise;
+        const idx = stageOrder.indexOf(stage);
+        const cell = cells[idx];
+        if (cell) {
+            const runBtn = cell.querySelector('div:last-child');
+            if (runBtn) runBtn.innerHTML = '<span class="loader" style="width:12px;height:12px;border-width:2px"></span>';
+        }
+
+        try {
+            const resp = await fetch(`/api/companies/${TICKER}/run-stage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stage, force }),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                alert('Error: ' + data.error);
+                if (cell) {
+                    const runBtn = cell.querySelector('div:last-child');
+                    if (runBtn) runBtn.innerHTML = '&#9654; Run';
+                }
+                return;
+            }
+            // Mark as running or enqueued to prevent re-runs
+            if (data.status === 'enqueued') {
+                _queuedStages.add(stage);
+            } else {
+                _runningStages.add(stage);
+            }
+            // Show confirmation
+            if (cell) {
+                const runBtn = cell.querySelector('div:last-child');
+                if (runBtn) {
+                    if (data.status === 'enqueued') {
+                        runBtn.innerHTML = '&#9202; Enqueued';
+                        runBtn.classList.add('text-yellow-400');
+                    } else {
+                        runBtn.innerHTML = '<span class="loader" style="width:12px;height:12px;border-width:2px"></span> Running';
+                        runBtn.classList.add('text-blue-400');
+                    }
+                }
+                cell.style.pointerEvents = 'none';
+                cell.style.opacity = '0.6';
+            }
+            // Hide rescore banner when score stage is queued
+            if (stage === 'score') {
+                const rescoreEl = document.getElementById('rescore-indicator');
+                if (rescoreEl) rescoreEl.innerHTML = '';
+            }
+            // Ensure the completion transition triggers a pipeline status refresh
+            _prevAnyRunning = true;
+            // Refresh runs list and start polling
+            loadCompanyRuns(TICKER);
+        } catch (e) {
+            console.error('Failed to trigger stage:', e);
+            alert('Failed to trigger stage: ' + e.message);
+            if (cell) {
+                const runBtn = cell.querySelector('div:last-child');
+                if (runBtn) runBtn.innerHTML = '&#9654; Run';
+            }
+        }
+    }
+
+    async function runWholePipeline(force = false) {
+        const btn = document.getElementById('run-whole-pipeline-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loader" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span> Starting...';
+        }
+
+        try {
+            const resp = await fetch(`/api/companies/${TICKER}/run-pipeline`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force }),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                alert('Error: ' + data.error);
+                if (btn) { btn.disabled = false; btn.innerHTML = 'Run Whole Pipeline'; }
+                return;
+            }
+
+            // Mark all stages as running/enqueued in the UI
+            const pipelineOrder = await _pipelineStagesPromise;
+            const targetSet = data.status === 'enqueued' ? _queuedStages : _runningStages;
+            for (const stage of pipelineOrder) {
+                targetSet.add(stage);
+            }
+            _applyRunningStageOverlay();
+
+            if (btn) {
+                btn.innerHTML = data.status === 'enqueued' ? 'Pipeline Enqueued' : 'Pipeline Running';
+                btn.classList.remove('bg-brand-600', 'hover:bg-brand-700');
+                btn.classList.add('bg-gray-700', 'text-gray-400');
+            }
+        } catch (e) {
+            console.error('Failed to trigger whole pipeline:', e);
+            alert('Failed to trigger pipeline: ' + e.message);
+            if (btn) { btn.disabled = false; btn.innerHTML = 'Run Whole Pipeline'; }
+        }
+
+        // Ensure the completion transition triggers a pipeline status refresh
+        _prevAnyRunning = true;
+        loadCompanyRuns(TICKER);
+    }
+
+    async function runSubPipeline(subTicker, btnEl, force = false) {
+        if (btnEl) { btnEl.disabled = true; btnEl.innerHTML = '<span class="loader" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span>'; }
+        try {
+            const resp = await fetch(`/api/companies/${subTicker}/run-pipeline`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force }),
+            });
+            const data = await resp.json();
+            if (data.error) {
+                alert(`Error for ${subTicker}: ${data.error}`);
+                if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '&#9654; Run'; }
+                return;
+            }
+            if (btnEl) {
+                btnEl.innerHTML = data.status === 'enqueued' ? 'Enqueued' : 'Running';
+                btnEl.classList.add('text-brand-400', 'border-brand-700');
+            }
+        } catch (e) {
+            alert(`Failed for ${subTicker}: ${e.message}`);
+            if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '&#9654; Run'; }
+        }
+    }
+
+    async function runAllSubsidiaryPipelines(force = false) {
+        const subs = window._subsidiaries || [];
+        if (subs.length === 0) return;
+
+        const btn = document.getElementById('run-all-subs-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loader" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle"></span> Starting...';
+        }
+
+        let started = 0, failed = 0;
+        for (const sub of subs) {
+            const subTicker = sub.ticker || sub.slug;
+            try {
+                const resp = await fetch(`/api/companies/${subTicker}/run-pipeline`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force }),
+                });
+                const data = await resp.json();
+                if (data.error) { failed++; } else { started++; }
+            } catch (e) {
+                failed++;
+            }
+        }
+
+        if (btn) {
+            const msg = failed > 0 ? `${started} started, ${failed} failed` : `${started} pipelines started`;
+            btn.innerHTML = msg;
+            btn.classList.remove('bg-brand-600', 'hover:bg-brand-700');
+            btn.classList.add('bg-gray-700', 'text-gray-400');
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.innerHTML = 'Run All Pipelines';
+                btn.classList.remove('bg-gray-700', 'text-gray-400');
+                btn.classList.add('bg-brand-600', 'hover:bg-brand-700');
+            }, 10000);
+        }
+    }
+
+    let _runsPollingTimer = null;
+    let _runsPage = 1;
+    let _allLoadedRuns = [];
+    let _runsHasMore = false;
+    let _runningStages = new Set();  // stages with an active running pipeline
+    let _prevAnyRunning = false;
+
+    const _statusBadge = (status) => {
+        const map = {
+            running: 'bg-blue-900/40 text-blue-400 border-blue-800',
+            enqueued: 'bg-yellow-900/40 text-yellow-400 border-yellow-800',
+            completed: 'bg-green-900/40 text-green-400 border-green-800',
+            failed: 'bg-red-900/40 text-red-400 border-red-800',
+            cancelled: 'bg-orange-900/40 text-orange-400 border-orange-800',
+        };
+        return map[status] || 'bg-gray-800 text-gray-400 border-gray-700';
+    };
+
+    const _statusIcon = (status) => {
+        if (status === 'running') return '<span class="loader" style="width:10px;height:10px;border-width:2px"></span>';
+        if (status === 'enqueued') return '<span class="text-yellow-400">&#9202;</span>';
+        if (status === 'completed') return '<span class="text-green-400">&#10003;</span>';
+        if (status === 'failed') return '<span class="text-red-400">&#10007;</span>';
+        if (status === 'cancelled') return '<span class="text-orange-400">&#8856;</span>';
+        return '';
+    };
+
+    const _fmtDuration = (sec) => {
+        if (sec == null) return '—';
+        if (sec < 60) return sec.toFixed(1) + 's';
+        if (sec < 3600) return Math.floor(sec / 60) + 'm ' + Math.round(sec % 60) + 's';
+        return Math.floor(sec / 3600) + 'h ' + Math.round((sec % 3600) / 60) + 'm';
+    };
+
+    const _fmtTime = (iso) => {
+        if (!iso) return '—';
+        const d = new Date(iso);
+        const now = new Date();
+        const diffMs = now - d;
+        if (diffMs < 60000) return 'just now';
+        if (diffMs < 3600000) return Math.floor(diffMs / 60000) + 'm ago';
+        if (diffMs < 86400000) return Math.floor(diffMs / 3600000) + 'h ago';
+        return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    };
+
+    const _runTypeBadge = (rt) => {
+        if (rt === 'web_trigger') return '<span class="text-xs px-1.5 py-0.5 rounded bg-brand-900/30 text-brand-400 border border-brand-800">manual</span>';
+        if (rt === 'full') return '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 border border-gray-700">full</span>';
+        if (rt === 'partial') return '<span class="text-xs px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-500 border border-yellow-800">partial</span>';
+        return '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 border border-gray-700">' + (rt || '—') + '</span>';
+    };
+
+    function _renderRunCounts(run) {
+        const parts = [];
+        if (run.evidence_count > 0) parts.push(run.evidence_count + ' evidence');
+        if (run.groups_count > 0) parts.push(run.groups_count + ' groups');
+        if (run.valuations_count > 0) parts.push(run.valuations_count + ' valuations');
+        if (run.scores_count > 0) parts.push(run.scores_count + ' scores');
+
+        if (parts.length > 0) {
+            return `<div class="mt-1 pl-8 text-xs text-gray-500">${parts.join(' · ')}</div>`;
+        }
+        if (run.status === 'completed' || run.status === 'failed') {
+            return '<div class="mt-1 pl-8 text-xs text-gray-600">no new data</div>';
+        }
+        return '';
+    }
+
+    function _renderRunRow(run) {
+        const subtask = run.subtask || run.task || '—';
+        const succeeded = run.tickers_succeeded || 0;
+        const failed = run.tickers_failed || 0;
+        const duration = run.duration_sec != null
+            ? _fmtDuration(run.duration_sec)
+            : (run.status === 'running' && run.started_at
+                ? _fmtDuration((Date.now() - new Date(run.started_at)) / 1000) + '...'
+                : '—');
+
+        return `<div class="bg-gray-800/30 rounded-lg px-4 py-3 border border-gray-800">
+            <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex-shrink-0 w-5">${_statusIcon(run.status)}</div>
+                <span class="text-xs px-2 py-0.5 rounded border ${_statusBadge(run.status)}">${run.status}</span>
+                ${_runTypeBadge(run.run_type)}
+                <span class="text-sm text-gray-200 font-medium">${subtask}</span>
+                <span class="ml-auto text-xs text-gray-600 font-mono">${run.run_id?.slice(0, 12) || ''}</span>
+                ${(run.status === 'running' || run.status === 'enqueued') ? `<button onclick="cancelRun('${run.run_id}')" class="text-xs text-red-400 hover:text-red-300 ml-2 px-2 py-0.5 rounded border border-red-900 hover:border-red-700 transition-colors">Cancel</button>` : ''}
+            </div>
+            <div class="flex items-center gap-4 mt-1.5 text-xs text-gray-500 pl-8">
+                <span title="${run.started_at || ''}">Started ${_fmtTime(run.started_at)}</span>
+                <span>Duration: <span class="text-gray-400">${duration}</span></span>
+                ${succeeded > 0 ? `<span class="text-green-600">${succeeded} succeeded</span>` : ''}
+                ${failed > 0 ? `<span class="text-red-500">${failed} failed</span>` : ''}
+            </div>
+            ${run.error_message ? `<div class="mt-1.5 pl-8 text-xs text-red-400/80 truncate" title="${run.error_message.replace(/"/g, '&quot;')}">${run.error_message}</div>` : ''}
+            ${_renderRunCounts(run)}
+        </div>`;
+    }
+
+    function _renderRunsList() {
+        const container = document.getElementById('pipeline-runs-section');
+        if (!container) return;
+
+        if (_allLoadedRuns.length === 0) {
+            container.innerHTML = '';
+            return;
+        }
+
+        const anyRunning = _allLoadedRuns.some(r => r.status === 'running' || r.status === 'enqueued');
+
+        let rh = `<details class="bg-gray-900 border border-gray-800 rounded-xl">
+            <summary class="p-6 cursor-pointer select-none flex items-center gap-2 hover:bg-gray-800/30 transition-colors">
+                <svg class="w-3 h-3 text-gray-500 transition-transform details-arrow" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l8 6-8 6V4z"/></svg>
+                <span class="font-semibold text-gray-300">Recent Pipeline Runs</span>
+                ${anyRunning ? '<span class="loader ml-2" style="width:12px;height:12px;border-width:2px"></span>' : ''}
+            </summary>
+            <div class="px-6 pb-6 space-y-2">`;
+
+        for (const run of _allLoadedRuns) {
+            rh += _renderRunRow(run);
+        }
+
+        if (_runsHasMore) {
+            rh += `<button onclick="loadMoreRuns()" id="load-more-runs-btn" class="w-full py-2 text-xs text-gray-500 hover:text-gray-300 border border-gray-800 rounded-lg hover:border-gray-700 transition-colors">Load older runs</button>`;
+        }
+
+        rh += `</div></details>`;
+
+        // Preserve open state across re-renders
+        const wasOpen = container.querySelector('details')?.open || false;
+        container.innerHTML = rh;
+        if (wasOpen) container.querySelector('details').open = true;
+
+        // Build set of stages that are currently running or enqueued
+        _runningStages = new Set();
+        _queuedStages.clear();
+        for (const run of _allLoadedRuns) {
+            if ((run.status === 'running' || run.status === 'enqueued') && run.subtask) {
+                const targetSet = run.status === 'running' ? _runningStages : _queuedStages;
+                // subtask may be "value_evidence" or "collect_news+extract_news+value_evidence"
+                for (const s of run.subtask.split('+')) {
+                    targetSet.add(s.trim());
+                }
+            }
+        }
+        _applyRunningStageOverlay();
+
+        // Poll if any runs are still running
+        if (_runsPollingTimer) clearInterval(_runsPollingTimer);
+        if (anyRunning) {
+            _runsPollingTimer = setInterval(() => loadCompanyRuns(TICKER), 5000);
+        } else if (_prevAnyRunning) {
+            // Runs just finished — refresh pipeline status and page data
+            loadPipelineStatus(TICKER);
+            loadValuations(TICKER);
+        }
+        _prevAnyRunning = anyRunning;
+    }
+
+    async function cancelRun(runId) {
+        try {
+            const resp = await fetch(`/api/companies/${TICKER}/cancel-run`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ run_id: runId }),
+            });
+            const data = await resp.json();
+            if (data.error) { alert('Error: ' + data.error); return; }
+            // Update locally to avoid page jump and preserve loaded pages
+            const run = _allLoadedRuns.find(r => r.run_id === runId);
+            if (run) {
+                run.status = 'cancelled';
+                run.error_message = 'Cancelled by user';
+                run.completed_at = new Date().toISOString();
+                if (run.started_at) {
+                    run.duration_sec = Math.round((Date.now() - new Date(run.started_at)) / 1000 * 10) / 10;
+                }
+            }
+            _renderRunsList();
+        } catch (e) {
+            console.error('Failed to cancel run:', e);
+            alert('Failed to cancel run: ' + e.message);
+        }
+    }
+
+    async function loadCompanyRuns(ticker, page) {
+        const container = document.getElementById('pipeline-runs-section');
+        if (!container) return;
+
+        if (page === undefined) {
+            // Fresh load — reset
+            page = 1;
+            _runsPage = 1;
+            _allLoadedRuns = [];
+        }
+
+        try {
+            const resp = await fetch(`/api/companies/${ticker}/runs?page=${page}&per_page=5`);
+            const data = await resp.json();
+            const runs = data.runs || [];
+            _runsHasMore = data.has_more || false;
+
+            if (page === 1) {
+                _allLoadedRuns = runs;
+            } else {
+                _allLoadedRuns = _allLoadedRuns.concat(runs);
+            }
+            _runsPage = page;
+
+            _renderRunsList();
+
+        } catch (e) {
+            console.error('Failed to load company runs:', e);
+            container.innerHTML = '';
+        }
+    }
+
+    async function loadMoreRuns() {
+        const btn = document.getElementById('load-more-runs-btn');
+        if (btn) btn.textContent = 'Loading...';
+        await loadCompanyRuns(TICKER, _runsPage + 1);
+    }
+
+    async function updateSubsidiaryRecords() {
+        try {
+            const resp = await fetch(`/api/companies/${TICKER}/run-stage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stage: 'discover_links' }),
+            });
+            const result = await resp.json();
+            if (result.error) {
+                alert('Error: ' + result.error);
+            } else {
+                alert('Pipeline started. The page will refresh when data is available.');
+                setTimeout(() => location.reload(), 3000);
+            }
+        } catch (e) {
+            alert('Failed to start pipeline: ' + e.message);
+        }
     }
 
     load();

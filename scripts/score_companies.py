@@ -19,15 +19,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select
 
-from ai_opportunity_index.config import RAW_DIR, CAPTURE_WEIGHTS, OPPORTUNITY_WEIGHTS, SIGNAL_STRENGTH_HIGH, SIGNAL_STRENGTH_MEDIUM
+from ai_opportunity_index.config import (
+    RAW_DIR, CAPTURE_WEIGHTS, OPPORTUNITY_WEIGHTS, SIGNAL_STRENGTH_HIGH, SIGNAL_STRENGTH_MEDIUM,
+    DOLLAR_AVG_AI_SALARY, DOLLAR_PRODUCTIVITY_GAIN_PCT, DOLLAR_REVENUE_PENETRATION_RATE,
+)
 from ai_opportunity_index.data.filing_extraction import _strip_xbrl_tags
 from ai_opportunity_index.data.industry_mappings import sic_to_soc_groups
-from ai_opportunity_index.domains import AIOpportunityEvidence, CompanyScore, PipelineRun, PipelineSubtask, PipelineTask, ScoreChange
+from ai_opportunity_index.domains import (
+    AIOpportunityEvidence, CompanyScore, EvidenceSourceType, PipelineRun, PipelineSubtask,
+    PipelineTask, RunStatus, RunType, ScoreChange, SignalStrength,
+)
 from ai_opportunity_index.scoring.pipeline.runner import ScoringPipeline
 from ai_opportunity_index.scoring.ai_capture import compute_capture_scores, flag_capture_discrepancies
 from ai_opportunity_index.scoring.ai_opportunity import compute_opportunity_score
 from ai_opportunity_index.scoring.ai_realization import compute_realization_score, flag_discrepancies
-from ai_opportunity_index.scoring.composite import compute_index, compute_index_4v
+from ai_opportunity_index.scoring.composite import compute_index, compute_index_4v, compute_subsidiary_attribution
 from ai_opportunity_index.scoring.evidence_classification import ClassifiedScorerOutput
 from ai_opportunity_index.scoring.realization.analyst_scorer import score_analyst_classified
 from ai_opportunity_index.scoring.realization.filing_nlp import score_filing_classified, score_filing_classified_async
@@ -37,6 +43,7 @@ from ai_opportunity_index.scoring.realization.web_signals import score_web_enric
 from ai_opportunity_index.storage.db import (
     complete_pipeline_run,
     create_pipeline_run,
+    get_company_subsidiaries,
     get_evidence_groups_for_company,
     get_final_valuations_for_company,
     get_latest_financials,
@@ -142,6 +149,53 @@ def _build_scorer_from_valuations(
             "revenue_potential_usd": agg["revenue_potential_usd"],
             "revenue_actual_usd": agg["revenue_actual_usd"],
         },
+    )
+
+
+def _compute_opportunity_usd(
+    cost_opp_score: float,
+    revenue: float | None,
+    employees: int | None,
+) -> tuple[float, float]:
+    """Compute dollar opportunity from financials and BLS-derived scores.
+
+    Returns (cost_opp_usd, revenue_opp_usd).
+    """
+    cost_opp_usd = (employees or 0) * DOLLAR_AVG_AI_SALARY * cost_opp_score * DOLLAR_PRODUCTIVITY_GAIN_PCT
+    revenue_opp_usd = (revenue or 0) * DOLLAR_REVENUE_PENETRATION_RATE
+    return cost_opp_usd, revenue_opp_usd
+
+
+def _compute_ai_index_for_company(
+    company_id: int,
+    opportunity_usd: float | None = None,
+) -> dict | None:
+    """Compute the AI Index from final valuations in the DB.
+
+    Returns the compute_ai_index result dict, or None if no valuations.
+    """
+    from ai_opportunity_index.scoring.composite import compute_ai_index
+
+    final_vals = get_final_valuations_for_company(company_id)
+    if not final_vals:
+        return None
+
+    plan_dollars = 0.0
+    investment_dollars = 0.0
+    capture_dollars = 0.0
+
+    for val in final_vals:
+        mid = val.dollar_mid or 0.0
+        if val.evidence_type == "plan":
+            plan_dollars += mid
+        elif val.evidence_type == "investment":
+            investment_dollars += mid
+        elif val.evidence_type == "capture":
+            capture_dollars += mid
+
+    return compute_ai_index(
+        plan_dollars, investment_dollars, capture_dollars,
+        opportunity_usd=opportunity_usd,
     )
 
 
@@ -295,11 +349,11 @@ def build_evidence_items(
         items.append(AIOpportunityEvidence(
             company_id=company_id,
             pipeline_run_id=pipeline_run_id,
-            evidence_type="revenue_opportunity",
+            evidence_type=EvidenceSourceType.REVENUE_OPPORTUNITY,
             source_name="BLS / Industry Analysis",
             score_contribution=opp_scores["revenue_opportunity"],
-            signal_strength="high" if opp_scores["revenue_opportunity"] > SIGNAL_STRENGTH_HIGH else "medium" if opp_scores["revenue_opportunity"] > SIGNAL_STRENGTH_MEDIUM else "low",
-            target_dimension="revenue",
+            signal_strength=SignalStrength.HIGH if opp_scores["revenue_opportunity"] > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if opp_scores["revenue_opportunity"] > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
+            target_dimension=TargetDimension.REVENUE,
             payload=rev_payload,
         ))
 
@@ -311,11 +365,11 @@ def build_evidence_items(
         items.append(AIOpportunityEvidence(
             company_id=company_id,
             pipeline_run_id=pipeline_run_id,
-            evidence_type="cost_opportunity",
+            evidence_type=EvidenceSourceType.COST_OPPORTUNITY,
             source_name="BLS / Workforce Analysis",
             score_contribution=opp_scores["cost_opportunity"],
-            signal_strength="high" if opp_scores["cost_opportunity"] > SIGNAL_STRENGTH_HIGH else "medium" if opp_scores["cost_opportunity"] > SIGNAL_STRENGTH_MEDIUM else "low",
-            target_dimension="cost",
+            signal_strength=SignalStrength.HIGH if opp_scores["cost_opportunity"] > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if opp_scores["cost_opportunity"] > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
+            target_dimension=TargetDimension.COST,
             payload=cost_payload,
         ))
 
@@ -346,13 +400,13 @@ def _add_classified_evidence(
         "analyst": "Yahoo Finance / Analyst Consensus",
     }
     evidence_types = {
-        "filing": "filing_nlp",
-        "product": "product",
-        "job": "job",
-        "patent": "patent",
-        "web": "web_enrichment",
-        "github": "github",
-        "analyst": "analyst",
+        "filing": EvidenceSourceType.FILING_NLP,
+        "product": EvidenceSourceType.PRODUCT,
+        "job": EvidenceSourceType.JOB,
+        "patent": EvidenceSourceType.PATENT,
+        "web": EvidenceSourceType.WEB_ENRICHMENT,
+        "github": EvidenceSourceType.GITHUB,
+        "analyst": EvidenceSourceType.ANALYST,
     }
 
     # Track seen keys for dedup: (evidence_type, target_dimension, keyword/patent_number)
@@ -385,9 +439,9 @@ def _add_classified_evidence(
                         evidence_subtype=ev.source_type,
                         source_name=source_names.get(key, ""),
                         score_contribution=ev.raw_score,
-                        signal_strength="high" if ev.raw_score > SIGNAL_STRENGTH_HIGH else "medium" if ev.raw_score > SIGNAL_STRENGTH_MEDIUM else "low",
-                        target_dimension=target_dim,
-                        capture_stage=ev.stage.value,
+                        signal_strength=SignalStrength.HIGH if ev.raw_score > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if ev.raw_score > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
+                        target_dimension=ev.target,
+                        capture_stage=ev.stage,
                         source_excerpt=ev.source_excerpt or None,
                         payload=payload,
                     )
@@ -407,9 +461,9 @@ def _add_classified_evidence(
                     evidence_subtype=ev.source_type,
                     source_name=source_names.get(key, ""),
                     score_contribution=ev.raw_score,
-                    signal_strength="high" if ev.raw_score > SIGNAL_STRENGTH_HIGH else "medium" if ev.raw_score > SIGNAL_STRENGTH_MEDIUM else "low",
-                    target_dimension=target_dim,
-                    capture_stage=ev.stage.value,
+                    signal_strength=SignalStrength.HIGH if ev.raw_score > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if ev.raw_score > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
+                    target_dimension=ev.target,
+                    capture_stage=ev.stage,
                     source_excerpt=ev.source_excerpt or None,
                     payload=meta,
                 )
@@ -431,7 +485,7 @@ def _add_legacy_evidence(
         items.append(AIOpportunityEvidence(
             company_id=company_id,
             pipeline_run_id=pipeline_run_id,
-            evidence_type="filing_nlp",
+            evidence_type=EvidenceSourceType.FILING_NLP,
             evidence_subtype="keyword_match",
             source_name="SEC EDGAR",
             payload=ev if isinstance(ev, dict) else {"raw": ev},
@@ -443,11 +497,11 @@ def _add_legacy_evidence(
         items.append(AIOpportunityEvidence(
             company_id=company_id,
             pipeline_run_id=pipeline_run_id,
-            evidence_type="product",
+            evidence_type=EvidenceSourceType.PRODUCT,
             evidence_subtype="product_launch",
             source_name="GNews API / SEC EDGAR RSS",
             score_contribution=ev.get("score"),
-            signal_strength="high" if ev.get("score", 0) > SIGNAL_STRENGTH_HIGH else "medium" if ev.get("score", 0) > SIGNAL_STRENGTH_MEDIUM else "low",
+            signal_strength=SignalStrength.HIGH if ev.get("score", 0) > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if ev.get("score", 0) > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
             payload=ev,
         ))
 
@@ -457,11 +511,11 @@ def _add_legacy_evidence(
         items.append(AIOpportunityEvidence(
             company_id=company_id,
             pipeline_run_id=pipeline_run_id,
-            evidence_type="job",
+            evidence_type=EvidenceSourceType.JOB,
             evidence_subtype=ev.get("method", "heuristic"),
             source_name=ev.get("source", {}).get("name", "Adzuna"),
             score_contribution=ev.get("score"),
-            signal_strength="high" if ev.get("score", 0) > SIGNAL_STRENGTH_HIGH else "medium" if ev.get("score", 0) > SIGNAL_STRENGTH_MEDIUM else "low",
+            signal_strength=SignalStrength.HIGH if ev.get("score", 0) > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if ev.get("score", 0) > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
             payload=ev,
         ))
 
@@ -471,11 +525,11 @@ def _add_legacy_evidence(
         items.append(AIOpportunityEvidence(
             company_id=company_id,
             pipeline_run_id=pipeline_run_id,
-            evidence_type="patent",
+            evidence_type=EvidenceSourceType.PATENT,
             evidence_subtype="ai_patent",
             source_name="USPTO PatentsView API",
             score_contribution=ev.get("score"),
-            signal_strength="high" if ev.get("score", 0) > SIGNAL_STRENGTH_HIGH else "medium" if ev.get("score", 0) > SIGNAL_STRENGTH_MEDIUM else "low",
+            signal_strength=SignalStrength.HIGH if ev.get("score", 0) > SIGNAL_STRENGTH_HIGH else SignalStrength.MEDIUM if ev.get("score", 0) > SIGNAL_STRENGTH_MEDIUM else SignalStrength.LOW,
             payload=ev,
         ))
 
@@ -490,7 +544,7 @@ def score_single_company_pipeline(
     from ai_opportunity_index.data.industry_mappings import sic_to_soc_groups
     from ai_opportunity_index.scoring.pipeline.runner import ScoringPipeline
 
-    ticker = company.ticker
+    ticker = company.ticker or company.slug
     financials_obs = get_latest_financials(company.id)
     revenue_obs = financials_obs.get("revenue")
     employees_obs = financials_obs.get("employees")
@@ -538,6 +592,10 @@ def score_single_company_pipeline(
             "total_investment_usd": dollar_score.total_investment_usd,
         },
         "flags": [],
+        "ai_index": _compute_ai_index_for_company(
+            company.id,
+            opportunity_usd=(dollar_score.cost_opportunity_usd or 0) + (dollar_score.revenue_opportunity_usd or 0),
+        ),
     }
 
 
@@ -551,7 +609,7 @@ def score_single_company(
 
     Returns dict with all scores, or None on failure.
     """
-    ticker = company.ticker
+    ticker = company.ticker or company.slug
     name = company.company_name or ticker
 
     # ── Fetch latest financials from observations ──────────────────────
@@ -574,21 +632,31 @@ def score_single_company(
         "sector": company.sector,
         "soc_groups": soc_groups,
     }
-    # Dollar pipeline disabled — ScoringPipeline has broken import
-    # (get_ai_applicability). Skip to avoid wasting time on every company.
-    dollar_score = None
+    pipeline = ScoringPipeline()
+    dollar_score = pipeline.score_company(company_context, company_financials)
 
     # ── Dimension 1: AI Opportunity ────────────────────────────────────
+    revenue_val = revenue_obs.value if revenue_obs else None
+    employees_val = int(employees_obs.value) if employees_obs else None
+
     opp_scores = compute_opportunity_score(
         sic=company.sic,
-        revenue=revenue_obs.value if revenue_obs else None,
-        employees=int(employees_obs.value) if employees_obs else None,
+        revenue=revenue_val,
+        employees=employees_val,
         sector=company.sector,
         industry=company.industry,
     )
 
     cost_opportunity = opp_scores.get("cost_opportunity", 0.0) or 0.0
     revenue_opportunity = opp_scores.get("revenue_opportunity", 0.0) or 0.0
+
+    # ── Compute dollar opportunity from financials + opp scores ────────
+    cost_opp_usd, revenue_opp_usd = _compute_opportunity_usd(
+        cost_opp_score=cost_opportunity,
+        revenue=revenue_val,
+        employees=employees_val,
+    )
+    opportunity_usd = cost_opp_usd + revenue_opp_usd
 
     # ── Dimension 2: AI Capture (classified) ───────────────────────────
     classified_outputs: dict[str, ClassifiedScorerOutput | None] = {
@@ -703,6 +771,10 @@ def score_single_company(
         "evidence": evidence,
         "classified_outputs": classified_outputs,
         "dollar_score": dollar_score,
+        "ai_index": _compute_ai_index_for_company(company.id, opportunity_usd=opportunity_usd),
+        "cost_opp_usd": cost_opp_usd,
+        "revenue_opp_usd": revenue_opp_usd,
+        "opportunity_usd": opportunity_usd,
     }
 
 
@@ -715,7 +787,7 @@ async def score_single_company_async(
     Runs filing NLP and product analysis LLM calls concurrently.
     Web enrichment scoring is pure local I/O, no LLM calls.
     """
-    ticker = company.ticker
+    ticker = company.ticker or company.slug
     name = company.company_name or ticker
 
     # ── Fetch latest financials from observations ──────────────────────
@@ -738,21 +810,31 @@ async def score_single_company_async(
         "sector": company.sector,
         "soc_groups": soc_groups,
     }
-    # Dollar pipeline disabled — ScoringPipeline has broken import
-    # (get_ai_applicability). Skip to avoid wasting time on every company.
-    dollar_score = None
+    pipeline = ScoringPipeline()
+    dollar_score = pipeline.score_company(company_context, company_financials)
 
     # ── Dimension 1: AI Opportunity ────────────────────────────────────
+    revenue_val = revenue_obs.value if revenue_obs else None
+    employees_val = int(employees_obs.value) if employees_obs else None
+
     opp_scores = compute_opportunity_score(
         sic=company.sic,
-        revenue=revenue_obs.value if revenue_obs else None,
-        employees=int(employees_obs.value) if employees_obs else None,
+        revenue=revenue_val,
+        employees=employees_val,
         sector=company.sector,
         industry=company.industry,
     )
 
     cost_opportunity = opp_scores.get("cost_opportunity", 0.0) or 0.0
     revenue_opportunity = opp_scores.get("revenue_opportunity", 0.0) or 0.0
+
+    # ── Compute dollar opportunity from financials + opp scores ────────
+    cost_opp_usd, revenue_opp_usd = _compute_opportunity_usd(
+        cost_opp_score=cost_opportunity,
+        revenue=revenue_val,
+        employees=employees_val,
+    )
+    opportunity_usd = cost_opp_usd + revenue_opp_usd
 
     # ── Dimension 2: AI Capture (classified, async) ────────────────────
     classified_outputs: dict[str, ClassifiedScorerOutput | None] = {
@@ -932,7 +1014,55 @@ async def score_single_company_async(
         "evidence": evidence,
         "classified_outputs": classified_outputs,
         "dollar_score": dollar_score,
+        "ai_index": _compute_ai_index_for_company(company.id, opportunity_usd=opportunity_usd),
+        "cost_opp_usd": cost_opp_usd,
+        "revenue_opp_usd": revenue_opp_usd,
+        "opportunity_usd": opportunity_usd,
     }
+
+
+def _extract_ai_index_fields(result: dict) -> tuple[float | None, float | None, float | None, float | None]:
+    """Extract ai_index_usd, capture_probability, opportunity_usd, evidence_dollars from a scoring result."""
+    ai_idx = result.get("ai_index") or {}
+    return (
+        ai_idx.get("ai_index_usd"),
+        ai_idx.get("capture_probability"),
+        ai_idx.get("opportunity_usd"),
+        ai_idx.get("evidence_dollars"),
+    )
+
+
+def _apply_subsidiary_attribution(company: CompanyModel, idx: dict) -> None:
+    """Adjust parent index scores with weighted subsidiary contributions."""
+    try:
+        subs = get_company_subsidiaries(company.id)
+        scored_subs = [s for s in subs if s.get("has_scores") and s.get("latest_score")]
+        if not scored_subs:
+            return
+        sub_data = [
+            {
+                "ownership_pct": s["ownership_pct"],
+                "opportunity": s["latest_score"]["opportunity"],
+                "realization": s["latest_score"]["realization"],
+                "company_name": s.get("company_name", ""),
+                "slug": s.get("slug", ""),
+            }
+            for s in scored_subs
+        ]
+        attribution = compute_subsidiary_attribution(
+            idx["opportunity"], idx["realization"], sub_data,
+        )
+        idx["opportunity"] = attribution["adjusted_opportunity"]
+        idx["realization"] = attribution["adjusted_realization"]
+        logger.info(
+            "Subsidiary attribution for %s: opp_boost=%.4f, real_boost=%.4f from %d subs",
+            company.ticker or getattr(company, "slug", "?"),
+            attribution["opportunity_boost"],
+            attribution["realization_boost"],
+            len(scored_subs),
+        )
+    except Exception as e:
+        logger.warning("Subsidiary attribution failed for %s: %s", company.ticker, e)
 
 
 async def score_and_save_company_async(
@@ -958,6 +1088,10 @@ async def score_and_save_company_async(
 
     opp = result["opportunity"]
     idx = result["index"]
+    ai_index_usd, capture_probability, ai_opportunity_usd, evidence_dollars = _extract_ai_index_fields(result)
+
+    # Subsidiary score attribution: boost parent scores from subsidiary data
+    _apply_subsidiary_attribution(company, idx)
 
     # Get previous score for change detection
     prev_score = get_latest_score(company.id)
@@ -979,6 +1113,10 @@ async def score_and_save_company_async(
             cost_capture_usd=ds.cost_capture_usd,
             revenue_capture_usd=ds.revenue_capture_usd,
             total_investment_usd=ds.total_investment_usd,
+            ai_index_usd=ai_index_usd,
+            capture_probability=capture_probability,
+            opportunity_usd=ai_opportunity_usd,
+            evidence_dollars=evidence_dollars,
             flags=result.get("flags", []),
             data_as_of=now,
             scored_at=now,
@@ -1014,6 +1152,12 @@ async def score_and_save_company_async(
             realization=idx["realization"],
             quadrant=idx["quadrant"],
             quadrant_label=idx["quadrant_label"],
+            cost_opp_usd=result.get("cost_opp_usd"),
+            revenue_opp_usd=result.get("revenue_opp_usd"),
+            ai_index_usd=ai_index_usd,
+            capture_probability=capture_probability,
+            opportunity_usd=ai_opportunity_usd,
+            evidence_dollars=evidence_dollars,
             flags=result.get("flags", []),
             data_as_of=now,
             scored_at=now,
@@ -1061,9 +1205,9 @@ def _build_dollar_evidence_items(
             evidence_subtype=p.source_type,
             source_name=p.source_document[:100],
             score_contribution=ve.total_3yr,
-            signal_strength="high" if ve.total_3yr > 1_000_000 else "medium" if ve.total_3yr > 100_000 else "low",
-            target_dimension=p.target.value,
-            capture_stage=p.stage.value,
+            signal_strength=SignalStrength.HIGH if ve.total_3yr > 1_000_000 else SignalStrength.MEDIUM if ve.total_3yr > 100_000 else SignalStrength.LOW,
+            target_dimension=p.target,
+            capture_stage=p.stage,
             source_excerpt=p.passage_text[:500] if p.passage_text else None,
             payload={
                 "dollar_year_1": ve.dollar_year_1,
@@ -1102,6 +1246,10 @@ def score_and_save_company(
 
     opp = result["opportunity"]
     idx = result["index"]
+    ai_index_usd, capture_probability, ai_opportunity_usd, evidence_dollars = _extract_ai_index_fields(result)
+
+    # Subsidiary score attribution: boost parent scores from subsidiary data
+    _apply_subsidiary_attribution(company, idx)
 
     # Get previous score for change detection
     prev_score = get_latest_score(company.id)
@@ -1123,6 +1271,10 @@ def score_and_save_company(
             cost_capture_usd=ds.cost_capture_usd,
             revenue_capture_usd=ds.revenue_capture_usd,
             total_investment_usd=ds.total_investment_usd,
+            ai_index_usd=ai_index_usd,
+            capture_probability=capture_probability,
+            opportunity_usd=ai_opportunity_usd,
+            evidence_dollars=evidence_dollars,
             flags=result.get("flags", []),
             data_as_of=now,
             scored_at=now,
@@ -1158,6 +1310,12 @@ def score_and_save_company(
             realization=idx["realization"],
             quadrant=idx["quadrant"],
             quadrant_label=idx["quadrant_label"],
+            cost_opp_usd=result.get("cost_opp_usd"),
+            revenue_opp_usd=result.get("revenue_opp_usd"),
+            ai_index_usd=ai_index_usd,
+            capture_probability=capture_probability,
+            opportunity_usd=ai_opportunity_usd,
+            evidence_dollars=evidence_dollars,
             flags=result.get("flags", []),
             data_as_of=now,
             scored_at=now,
@@ -1199,7 +1357,7 @@ def main():
     init_db()
     session = get_session()
     now = datetime.utcnow()
-    run_type = "partial" if args.tickers else "full"
+    run_type = RunType.PARTIAL if args.tickers else RunType.FULL
     ticker_list = [t.upper() for t in args.tickers] if args.tickers else []
 
     # Get companies to score
@@ -1220,7 +1378,7 @@ def main():
         task=PipelineTask.EXTRACT,
         subtask=PipelineSubtask.ALL,
         run_type=run_type,
-        status="running",
+        status=RunStatus.RUNNING,
         tickers_requested=ticker_list,
         parameters={"capture_weights": CAPTURE_WEIGHTS},
     ))
@@ -1232,7 +1390,7 @@ def main():
         task=PipelineTask.VALUE,
         subtask=PipelineSubtask.ALL,
         run_type=run_type,
-        status="running",
+        status=RunStatus.RUNNING,
         tickers_requested=ticker_list,
         parent_run_id=extract_run_id,
         parameters={"opportunity_weights": OPPORTUNITY_WEIGHTS},
@@ -1245,7 +1403,7 @@ def main():
         task=PipelineTask.SCORE,
         subtask=PipelineSubtask.ALL,
         run_type=run_type,
-        status="running",
+        status=RunStatus.RUNNING,
         tickers_requested=ticker_list,
         parent_run_id=value_run_id,
         parameters={
@@ -1281,19 +1439,19 @@ def main():
         # Complete all pipeline stage runs
         complete_pipeline_run(
             run_id=extract_run_id,
-            status="completed",
+            status=RunStatus.COMPLETED,
             tickers_succeeded=scored,
             tickers_failed=failed,
         )
         complete_pipeline_run(
             run_id=value_run_id,
-            status="completed",
+            status=RunStatus.COMPLETED,
             tickers_succeeded=scored,
             tickers_failed=failed,
         )
         complete_pipeline_run(
             run_id=score_run_id,
-            status="completed",
+            status=RunStatus.COMPLETED,
             tickers_succeeded=scored,
             tickers_failed=failed,
         )
@@ -1319,9 +1477,9 @@ def main():
 
     except Exception as exc:
         error_msg = str(exc)
-        complete_pipeline_run(run_id=extract_run_id, status="failed", error_message=error_msg)
-        complete_pipeline_run(run_id=value_run_id, status="failed", error_message=error_msg)
-        complete_pipeline_run(run_id=score_run_id, status="failed", error_message=error_msg)
+        complete_pipeline_run(run_id=extract_run_id, status=RunStatus.FAILED, error_message=error_msg)
+        complete_pipeline_run(run_id=value_run_id, status=RunStatus.FAILED, error_message=error_msg)
+        complete_pipeline_run(run_id=score_run_id, status=RunStatus.FAILED, error_message=error_msg)
         raise
     finally:
         session.close()

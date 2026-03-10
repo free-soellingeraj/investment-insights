@@ -22,6 +22,30 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from ai_opportunity_index.domains import (
+    CaptureStage,
+    EvidenceSourceType,
+    FinancialMetric,
+    FinancialUnits,
+    HorizonShape,
+    NotificationChannel,
+    NotificationStatus,
+    PlanTier,
+    PipelineSubtask,
+    PipelineTask,
+    Quadrant,
+    RefreshStatus,
+    RelationshipType,
+    RunStatus,
+    RunType,
+    SignalStrength,
+    SourceAuthority,
+    SubscriberStatus,
+    TargetDimension,
+    ValuationEvidenceType,
+    ValuationStage,
+)
+
 
 class Base(DeclarativeBase):
     pass
@@ -30,11 +54,16 @@ class Base(DeclarativeBase):
 class CompanyModel(Base):
     __tablename__ = "companies"
     __table_args__ = (
-        UniqueConstraint("ticker", "exchange", name="uq_companies_ticker_exchange"),
+        Index(
+            "uq_companies_ticker_exchange", "ticker", "exchange",
+            unique=True,
+            postgresql_where=text("ticker IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ticker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    ticker: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    slug: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
     exchange: Mapped[str | None] = mapped_column(String(20))
     company_name: Mapped[str | None] = mapped_column(String(500))
     cik: Mapped[int | None] = mapped_column(Integer, index=True)
@@ -48,6 +77,12 @@ class CompanyModel(Base):
     ir_url: Mapped[str | None] = mapped_column(String(2048))
     blog_url: Mapped[str | None] = mapped_column(String(2048))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    child_ticker_refs: Mapped[list[int] | None] = mapped_column(
+        ARRAY(Integer), nullable=True
+    )
+    canonical_company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=True
+    )
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -66,6 +101,42 @@ class CompanyModel(Base):
     score_changes: Mapped[list["ScoreChangeModel"]] = relationship(
         back_populates="company"
     )
+    ventures_as_parent: Mapped[list["CompanyVentureModel"]] = relationship(
+        foreign_keys="CompanyVentureModel.parent_id", back_populates="parent"
+    )
+    ventures_as_subsidiary: Mapped[list["CompanyVentureModel"]] = relationship(
+        foreign_keys="CompanyVentureModel.subsidiary_id", back_populates="subsidiary"
+    )
+
+
+class CompanyVentureModel(Base):
+    __tablename__ = "company_ventures"
+    __table_args__ = (
+        UniqueConstraint("parent_id", "subsidiary_id", name="uq_company_ventures"),
+        Index("ix_cv_parent", "parent_id"),
+        Index("ix_cv_subsidiary", "subsidiary_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=False
+    )
+    subsidiary_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("companies.id"), nullable=False
+    )
+    ownership_pct: Mapped[float | None] = mapped_column(Float)
+    relationship_type: Mapped[RelationshipType] = mapped_column(String(50), default="subsidiary")
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+
+    parent: Mapped["CompanyModel"] = relationship(
+        foreign_keys=[parent_id], back_populates="ventures_as_parent"
+    )
+    subsidiary: Mapped["CompanyModel"] = relationship(
+        foreign_keys=[subsidiary_id], back_populates="ventures_as_subsidiary"
+    )
 
 
 class FinancialObservationModel(Base):
@@ -79,9 +150,9 @@ class FinancialObservationModel(Base):
     company_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("companies.id"), nullable=False, index=True
     )
-    metric: Mapped[str] = mapped_column(String(50), nullable=False)
+    metric: Mapped[FinancialMetric] = mapped_column(String(50), nullable=False)
     value: Mapped[float] = mapped_column(Float, nullable=False)
-    value_units: Mapped[str] = mapped_column(String(30), nullable=False)
+    value_units: Mapped[FinancialUnits] = mapped_column(String(30), nullable=False)
     source_datetime: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     source_link: Mapped[str | None] = mapped_column(Text)
     source_name: Mapped[str | None] = mapped_column(String(100))
@@ -107,21 +178,25 @@ class EvidenceModel(Base):
     pipeline_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pipeline_runs.id")
     )
-    evidence_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    evidence_type: Mapped[EvidenceSourceType] = mapped_column(String(50), nullable=False)
     evidence_subtype: Mapped[str | None] = mapped_column(String(100))
     source_name: Mapped[str | None] = mapped_column(String(100))
     source_url: Mapped[str | None] = mapped_column(Text)
     source_date: Mapped[date | None] = mapped_column(Date)
     score_contribution: Mapped[float | None] = mapped_column(Float)
     weight: Mapped[float | None] = mapped_column(Float)
-    signal_strength: Mapped[str | None] = mapped_column(String(20))
+    signal_strength: Mapped[SignalStrength | None] = mapped_column(String(20))
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     observed_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
     )
-    target_dimension: Mapped[str | None] = mapped_column(String(20))  # 'cost', 'revenue', 'general'
-    capture_stage: Mapped[str | None] = mapped_column(String(20))  # 'planned', 'invested', 'realized'
+    target_dimension: Mapped[TargetDimension | None] = mapped_column(String(20))
+    capture_stage: Mapped[CaptureStage | None] = mapped_column(String(20))
     source_excerpt: Mapped[str | None] = mapped_column(Text)  # verbatim excerpt from source
+    source_author: Mapped[str | None] = mapped_column(String(200))
+    source_publisher: Mapped[str | None] = mapped_column(String(200))
+    source_access_date: Mapped[date | None] = mapped_column(Date)
+    source_authority: Mapped[str | None] = mapped_column(String(50))
     dollar_estimate_usd: Mapped[float | None] = mapped_column(Float)
     dollar_year_1: Mapped[float | None] = mapped_column(Float)
     dollar_year_2: Mapped[float | None] = mapped_column(Float)
@@ -167,7 +242,7 @@ class CompanyScoreModel(Base):
     combined_roi: Mapped[float | None] = mapped_column(Float)
     opportunity: Mapped[float] = mapped_column(Float, nullable=False)
     realization: Mapped[float] = mapped_column(Float, nullable=False)
-    quadrant: Mapped[str | None] = mapped_column(String(50))
+    quadrant: Mapped[Quadrant | None] = mapped_column(String(50))
     quadrant_label: Mapped[str | None] = mapped_column(String(100))
     combined_rank: Mapped[int | None] = mapped_column(Integer)
     cost_opp_usd: Mapped[float | None] = mapped_column(Float)
@@ -175,6 +250,10 @@ class CompanyScoreModel(Base):
     cost_capture_usd: Mapped[float | None] = mapped_column(Float)
     revenue_capture_usd: Mapped[float | None] = mapped_column(Float)
     total_investment_usd: Mapped[float | None] = mapped_column(Float)
+    ai_index_usd: Mapped[float | None] = mapped_column(Float)
+    capture_probability: Mapped[float | None] = mapped_column(Float)
+    opportunity_usd: Mapped[float | None] = mapped_column(Float)
+    evidence_dollars: Mapped[float | None] = mapped_column(Float)
     flags: Mapped[list] = mapped_column(ARRAY(String), default=list)
     data_as_of: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     scored_at: Mapped[datetime] = mapped_column(
@@ -192,10 +271,10 @@ class PipelineRunModel(Base):
     run_id: Mapped[str] = mapped_column(
         String(50), nullable=False, unique=True, index=True
     )
-    task: Mapped[str] = mapped_column(String(10), nullable=False)
-    subtask: Mapped[str] = mapped_column(String(25), nullable=False)
-    run_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="running")
+    task: Mapped[PipelineTask] = mapped_column(String(10), nullable=False)
+    subtask: Mapped[PipelineSubtask] = mapped_column(String(25), nullable=False)
+    run_type: Mapped[RunType] = mapped_column(String(30), nullable=False)
+    status: Mapped[RunStatus] = mapped_column(String(20), default="running")
     parameters: Mapped[dict | None] = mapped_column(JSONB, default=dict)
     tickers_requested: Mapped[list | None] = mapped_column(ARRAY(String), default=list)
     tickers_succeeded: Mapped[int] = mapped_column(Integer, default=0)
@@ -236,7 +315,7 @@ class RefreshRequestModel(Base):
     dimensions: Mapped[list] = mapped_column(
         ARRAY(String), default=lambda: ["opportunity", "realization"]
     )
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[RefreshStatus] = mapped_column(String(20), default="pending")
     pipeline_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pipeline_runs.id")
     )
@@ -267,11 +346,11 @@ class NotificationModel(Base):
         Integer, ForeignKey("subscribers.id"), nullable=False
     )
     notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    channel: Mapped[str] = mapped_column(String(20), default="email")
+    channel: Mapped[NotificationChannel] = mapped_column(String(20), default="email")
     subject: Mapped[str | None] = mapped_column(String(500))
     body: Mapped[str | None] = mapped_column(Text)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[NotificationStatus] = mapped_column(String(20), default="pending")
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -290,8 +369,8 @@ class SubscriberModel(Base):
     )
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255))
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255))
-    status: Mapped[str] = mapped_column(String(20), default="active")
-    plan_tier: Mapped[str] = mapped_column(String(30), default="standard")
+    status: Mapped[SubscriberStatus] = mapped_column(String(20), default="active")
+    plan_tier: Mapped[PlanTier] = mapped_column(String(30), default="standard")
     access_token: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, index=True
     )
@@ -321,8 +400,8 @@ class EvidenceGroupModel(Base):
     pipeline_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pipeline_runs.id")
     )
-    target_dimension: Mapped[str] = mapped_column(String(20), nullable=False)
-    evidence_type: Mapped[str | None] = mapped_column(String(20))
+    target_dimension: Mapped[TargetDimension] = mapped_column(String(20), nullable=False)
+    evidence_type: Mapped[ValuationEvidenceType | None] = mapped_column(String(20))
     passage_count: Mapped[int] = mapped_column(Integer, default=0)
     source_types: Mapped[list] = mapped_column(ARRAY(String(20)), default=list)
     date_earliest: Mapped[date | None] = mapped_column(Date)
@@ -365,10 +444,15 @@ class EvidenceGroupPassageModel(Base):
     source_date: Mapped[date | None] = mapped_column(Date)
     confidence: Mapped[float | None] = mapped_column(Float)
     reasoning: Mapped[str | None] = mapped_column(Text)
-    target_dimension: Mapped[str | None] = mapped_column(String(20))
-    capture_stage: Mapped[str | None] = mapped_column(String(20))
+    target_dimension: Mapped[TargetDimension | None] = mapped_column(String(20))
+    capture_stage: Mapped[CaptureStage | None] = mapped_column(String(20))
     source_url: Mapped[str | None] = mapped_column(Text)
     source_author: Mapped[str | None] = mapped_column(String(255))
+    source_author_role: Mapped[str | None] = mapped_column(String(200))
+    source_author_affiliation: Mapped[str | None] = mapped_column(String(200))
+    source_publisher: Mapped[str | None] = mapped_column(String(200))
+    source_access_date: Mapped[date | None] = mapped_column(Date)
+    source_authority: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -391,11 +475,11 @@ class ValuationModel(Base):
     pipeline_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pipeline_runs.id")
     )
-    stage: Mapped[str] = mapped_column(String(20), nullable=False)
+    stage: Mapped[ValuationStage] = mapped_column(String(20), nullable=False)
     preliminary_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("valuations.id")
     )
-    evidence_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    evidence_type: Mapped[ValuationEvidenceType] = mapped_column(String(20), nullable=False)
     narrative: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     dollar_low: Mapped[float | None] = mapped_column(Float)
@@ -443,7 +527,7 @@ class PlanDetailModel(Base):
     probability: Mapped[float | None] = mapped_column(Float)
     strategic_rationale: Mapped[str | None] = mapped_column(Text)
     contingencies: Mapped[str | None] = mapped_column(Text)
-    horizon_shape: Mapped[str | None] = mapped_column(String(20))
+    horizon_shape: Mapped[HorizonShape | None] = mapped_column(String(20))
     year_1_pct: Mapped[float | None] = mapped_column(Float)
     year_2_pct: Mapped[float | None] = mapped_column(Float)
     year_3_pct: Mapped[float | None] = mapped_column(Float)
@@ -464,9 +548,9 @@ class InvestmentDetailModel(Base):
     actual_spend_usd: Mapped[float | None] = mapped_column(Float)
     deployment_scope: Mapped[str | None] = mapped_column(Text)
     completion_pct: Mapped[float | None] = mapped_column(Float)
-    technology_area: Mapped[str | None] = mapped_column(String(100))
+    technology_area: Mapped[str | None] = mapped_column(Text)
     vendor_partner: Mapped[str | None] = mapped_column(String(200))
-    horizon_shape: Mapped[str | None] = mapped_column(String(20))
+    horizon_shape: Mapped[HorizonShape | None] = mapped_column(String(20))
     year_1_pct: Mapped[float | None] = mapped_column(Float)
     year_2_pct: Mapped[float | None] = mapped_column(Float)
     year_3_pct: Mapped[float | None] = mapped_column(Float)
@@ -488,9 +572,9 @@ class CaptureDetailModel(Base):
     metric_value_before: Mapped[str | None] = mapped_column(Text)
     metric_value_after: Mapped[str | None] = mapped_column(Text)
     metric_delta: Mapped[str | None] = mapped_column(Text)
-    measurement_period: Mapped[str | None] = mapped_column(String(50))
+    measurement_period: Mapped[str | None] = mapped_column(Text)
     measured_dollar_impact: Mapped[float | None] = mapped_column(Float)
-    horizon_shape: Mapped[str | None] = mapped_column(String(20), default="flat")
+    horizon_shape: Mapped[HorizonShape | None] = mapped_column(String(20), default="flat")
     year_1_pct: Mapped[float | None] = mapped_column(Float, default=1.0)
     year_2_pct: Mapped[float | None] = mapped_column(Float, default=1.0)
     year_3_pct: Mapped[float | None] = mapped_column(Float, default=1.0)
@@ -542,8 +626,8 @@ class ScoreChangeModel(Base):
     dimension: Mapped[str] = mapped_column(String(30), nullable=False)
     old_score: Mapped[float | None] = mapped_column(Float)
     new_score: Mapped[float | None] = mapped_column(Float)
-    old_quadrant: Mapped[str | None] = mapped_column(String(50))
-    new_quadrant: Mapped[str | None] = mapped_column(String(50))
+    old_quadrant: Mapped[Quadrant | None] = mapped_column(String(50))
+    new_quadrant: Mapped[Quadrant | None] = mapped_column(String(50))
     changed_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
     )
@@ -581,6 +665,10 @@ SELECT DISTINCT ON (c.id)
     cs.cost_capture_usd,
     cs.revenue_capture_usd,
     cs.total_investment_usd,
+    cs.ai_index_usd,
+    cs.capture_probability,
+    cs.opportunity_usd,
+    cs.evidence_dollars,
     cs.opportunity,
     cs.realization,
     cs.quadrant,

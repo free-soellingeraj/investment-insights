@@ -25,6 +25,8 @@ from ai_opportunity_index.domains import (
     PlanDetails,
     Valuation,
     ValuationDiscrepancy,
+    ValuationEvidenceType,
+    ValuationStage,
 )
 from ai_opportunity_index.prompts import load_prompt
 from ai_opportunity_index.storage.db import (
@@ -38,9 +40,9 @@ logger = logging.getLogger(__name__)
 
 # ── Stage weight constants ────────────────────────────────────────────────
 STAGE_WEIGHTS = {
-    "plan": 0.3,
-    "investment": 0.7,
-    "capture": 1.0,
+    ValuationEvidenceType.PLAN: 0.3,
+    ValuationEvidenceType.INVESTMENT: 0.7,
+    ValuationEvidenceType.CAPTURE: 1.0,
 }
 
 # Recency decay: 0.7^years_old, floor 0.3
@@ -52,7 +54,7 @@ RECENCY_FLOOR = 0.3
 
 
 class PreliminaryOutput(BaseModel):
-    evidence_type: str  # plan, investment, capture
+    evidence_type: str  # plan, investment, capture — normalized to lowercase
     narrative: str
     confidence: float
     dollar_low: float
@@ -73,7 +75,7 @@ class DiscrepancyInfo(BaseModel):
 
 
 class FinalOutput(BaseModel):
-    evidence_type: str
+    evidence_type: str  # plan, investment, capture — normalized to lowercase
     narrative: str
     confidence: float
     dollar_low: float
@@ -86,6 +88,34 @@ class FinalOutput(BaseModel):
     investment_detail: dict | None = None
     capture_detail: dict | None = None
     discrepancies: list[DiscrepancyInfo] = []
+
+
+def _normalize_evidence_type(raw: str) -> ValuationEvidenceType:
+    """Normalize LLM evidence_type output to ValuationEvidenceType enum.
+
+    LLMs may return uppercase ('INVESTMENT'), title case ('Plan'), or lowercase
+    ('capture'). This normalizes to the expected enum value.
+    """
+    lowered = raw.strip().lower()
+    try:
+        return ValuationEvidenceType(lowered)
+    except ValueError:
+        logger.warning("Unknown evidence_type from LLM: %r, defaulting to 'investment'", raw)
+        return ValuationEvidenceType.INVESTMENT
+
+
+def _normalize_horizon_shape(d: dict | None) -> dict:
+    """Normalize horizon_shape in a detail dict from LLM output.
+
+    LLMs may return uppercase enum names like 'LINEAR_RAMP' instead of
+    'linear_ramp'. Normalize to lowercase for HorizonShape enum compatibility.
+    """
+    if not d or "horizon_shape" not in d:
+        return d or {}
+    val = d.get("horizon_shape")
+    if isinstance(val, str):
+        d["horizon_shape"] = val.strip().lower()
+    return d
 
 
 # ── Factor score computation ──────────────────────────────────────────────
@@ -116,7 +146,66 @@ def _strip_nones(d: dict | None) -> dict:
     """
     if not d:
         return {}
-    return {k: v for k, v in d.items() if v is not None}
+    cleaned = {k: v for k, v in d.items() if v is not None}
+    # Truncate string fields that map to limited DB columns
+    _STR_LIMITS = {
+        "timeframe": 50,
+        "vendor_partner": 200,
+        "metric_name": 200,
+    }
+    for field, limit in _STR_LIMITS.items():
+        if field in cleaned and isinstance(cleaned[field], str) and len(cleaned[field]) > limit:
+            cleaned[field] = cleaned[field][:limit]
+    return cleaned
+
+
+# Fields on CaptureDetails that are typed str but LLMs sometimes return as float/int
+_CAPTURE_STR_FIELDS = {"metric_name", "metric_value_before", "metric_value_after", "metric_delta", "measurement_period"}
+
+
+def _parse_dollar_string(val: str) -> float | None:
+    """Try to parse a dollar string like '$10,000,000' or '$10B - $25B' into a float.
+
+    For ranges, takes the midpoint. Returns None if unparseable.
+    """
+    import re
+    # Strip whitespace
+    val = val.strip()
+    # Handle range: take first number
+    parts = re.split(r'\s*[-–—]\s*', val)
+    nums = []
+    for part in parts:
+        # Remove $, commas, whitespace
+        cleaned = re.sub(r'[$,\s]', '', part)
+        try:
+            nums.append(float(cleaned))
+        except ValueError:
+            pass
+    if not nums:
+        return None
+    # Midpoint for ranges, single value otherwise
+    return sum(nums) / len(nums)
+
+
+def _coerce_capture_detail(d: dict | None) -> dict:
+    """Strip nones and coerce LLM outputs for CaptureDetails fields.
+
+    Handles two known LLM issues:
+    - str fields receiving float/int values (metric_value_before, etc.)
+    - float field (measured_dollar_impact) receiving formatted strings like '$10,000,000,000'
+    """
+    cleaned = _strip_nones(d)
+    for key in _CAPTURE_STR_FIELDS:
+        if key in cleaned and not isinstance(cleaned[key], str):
+            cleaned[key] = str(cleaned[key])
+    # measured_dollar_impact should be float but LLMs sometimes return dollar strings
+    if "measured_dollar_impact" in cleaned and isinstance(cleaned["measured_dollar_impact"], str):
+        parsed = _parse_dollar_string(cleaned["measured_dollar_impact"])
+        if parsed is not None:
+            cleaned["measured_dollar_impact"] = parsed
+        else:
+            del cleaned["measured_dollar_impact"]  # drop unparseable, let default (None) apply
+    return cleaned
 
 
 def compute_factor_score(
@@ -274,27 +363,28 @@ async def run_preliminary_valuations(
             continue
 
         output: PreliminaryOutput = result
+        ev_type = _normalize_evidence_type(output.evidence_type)
 
         # Parse type-specific details
         plan_detail = None
         investment_detail = None
         capture_detail = None
 
-        if output.evidence_type == "plan" and output.plan_detail:
-            plan_detail = PlanDetails(**_strip_nones(output.plan_detail))
-        elif output.evidence_type == "investment" and output.investment_detail:
-            investment_detail = InvestmentDetails(**_strip_nones(output.investment_detail))
-        elif output.evidence_type == "capture" and output.capture_detail:
-            capture_detail = CaptureDetails(**_strip_nones(output.capture_detail))
+        if ev_type == ValuationEvidenceType.PLAN and output.plan_detail:
+            plan_detail = PlanDetails(**_normalize_horizon_shape(_strip_nones(output.plan_detail)))
+        elif ev_type == ValuationEvidenceType.INVESTMENT and output.investment_detail:
+            investment_detail = InvestmentDetails(**_normalize_horizon_shape(_strip_nones(output.investment_detail)))
+        elif ev_type == ValuationEvidenceType.CAPTURE and output.capture_detail:
+            capture_detail = CaptureDetails(**_normalize_horizon_shape(_coerce_capture_detail(output.capture_detail)))
 
         # Update group with classified evidence_type
-        group.evidence_type = output.evidence_type
+        group.evidence_type = ev_type
 
         val = Valuation(
             group_id=group.id,
             pipeline_run_id=pipeline_run_id,
-            stage="preliminary",
-            evidence_type=output.evidence_type,
+            stage=ValuationStage.PRELIMINARY,
+            evidence_type=ev_type,
             narrative=output.narrative,
             confidence=output.confidence,
             dollar_low=output.dollar_low,
@@ -310,7 +400,7 @@ async def run_preliminary_valuations(
         preliminary_valuations.append(val)
         logger.info(
             "[%s] Preliminary: group=%d type=%s confidence=%.2f dollars=$%.0f-$%.0f specificity=%.2f",
-            ticker, group.id, output.evidence_type,
+            ticker, group.id, ev_type.value,
             output.confidence, output.dollar_low, output.dollar_high, output.specificity,
         )
 
@@ -424,17 +514,20 @@ async def run_final_valuations(
             logger.warning("[%s] Final valuation failed for group %d: %s", ticker, group.id, e)
             continue
 
+        # Normalize LLM output
+        ev_type = _normalize_evidence_type(output.evidence_type)
+
         # Parse type-specific details
         plan_detail = None
         investment_detail = None
         capture_detail = None
 
-        if output.evidence_type == "plan" and output.plan_detail:
-            plan_detail = PlanDetails(**_strip_nones(output.plan_detail))
-        elif output.evidence_type == "investment" and output.investment_detail:
-            investment_detail = InvestmentDetails(**_strip_nones(output.investment_detail))
-        elif output.evidence_type == "capture" and output.capture_detail:
-            capture_detail = CaptureDetails(**_strip_nones(output.capture_detail))
+        if ev_type == ValuationEvidenceType.PLAN and output.plan_detail:
+            plan_detail = PlanDetails(**_normalize_horizon_shape(_strip_nones(output.plan_detail)))
+        elif ev_type == ValuationEvidenceType.INVESTMENT and output.investment_detail:
+            investment_detail = InvestmentDetails(**_normalize_horizon_shape(_strip_nones(output.investment_detail)))
+        elif ev_type == ValuationEvidenceType.CAPTURE and output.capture_detail:
+            capture_detail = CaptureDetails(**_normalize_horizon_shape(_coerce_capture_detail(output.capture_detail)))
 
         # Compute factor score components
         dollar_mid = None
@@ -443,16 +536,16 @@ async def run_final_valuations(
 
         specificity = max(0.0, min(1.0, output.specificity))
         magnitude = compute_magnitude(dollar_mid, revenue)
-        stage_weight = STAGE_WEIGHTS.get(output.evidence_type, 0.5)
+        stage_weight = STAGE_WEIGHTS.get(ev_type, 0.5)
         recency = compute_recency(group.date_latest)
         factor_score = compute_factor_score(specificity, magnitude, stage_weight, recency)
 
         val = Valuation(
             group_id=group.id,
             pipeline_run_id=pipeline_run_id,
-            stage="final",
+            stage=ValuationStage.FINAL,
             preliminary_id=preliminary.id,
-            evidence_type=output.evidence_type,
+            evidence_type=ev_type,
             narrative=output.narrative,
             confidence=output.confidence,
             dollar_low=output.dollar_low,
@@ -479,7 +572,7 @@ async def run_final_valuations(
         logger.info(
             "[%s] Final: group=%d type=%s factor_score=%.4f "
             "(spec=%.2f mag=%.4f sw=%.1f rec=%.2f) dollars=$%.0f-$%.0f%s",
-            ticker, group.id, output.evidence_type, factor_score,
+            ticker, group.id, ev_type.value, factor_score,
             specificity, magnitude, stage_weight, recency,
             output.dollar_low, output.dollar_high,
             " [ADJUSTED]" if output.adjusted_from_preliminary else "",
@@ -522,10 +615,11 @@ def aggregate_valuations(
     """
     group_by_id = {g.id: g for g in groups}
 
+    from ai_opportunity_index.domains import TargetDimension
     # Per-dimension aggregation
-    dim_scores: dict[str, float] = {"cost": 0.0, "revenue": 0.0, "general": 0.0}
-    potential_dollars: dict[str, float] = {"cost": 0.0, "revenue": 0.0, "general": 0.0}
-    actual_dollars: dict[str, float] = {"cost": 0.0, "revenue": 0.0, "general": 0.0}
+    dim_scores: dict[str, float] = {TargetDimension.COST: 0.0, TargetDimension.REVENUE: 0.0, TargetDimension.GENERAL: 0.0}
+    potential_dollars: dict[str, float] = {TargetDimension.COST: 0.0, TargetDimension.REVENUE: 0.0, TargetDimension.GENERAL: 0.0}
+    actual_dollars: dict[str, float] = {TargetDimension.COST: 0.0, TargetDimension.REVENUE: 0.0, TargetDimension.GENERAL: 0.0}
 
     for val in final_valuations:
         group = group_by_id.get(val.group_id)
@@ -534,14 +628,14 @@ def aggregate_valuations(
 
         dim = group.target_dimension
         if dim not in dim_scores:
-            dim = "general"
+            dim = TargetDimension.GENERAL
 
         # Add factor score with diminishing returns
         fs = val.factor_score or 0.0
         dim_scores[dim] += fs
 
         dollar_mid = val.dollar_mid or 0.0
-        if val.evidence_type == "capture":
+        if val.evidence_type == ValuationEvidenceType.CAPTURE:
             actual_dollars[dim] += dollar_mid
         else:
             potential_dollars[dim] += dollar_mid
@@ -552,20 +646,20 @@ def aggregate_valuations(
         dim_scores[dim] = min(1.0, 1.0 - math.exp(-raw)) if raw > 0 else 0.0
 
     return {
-        "cost_score": round(dim_scores["cost"], 4),
-        "revenue_score": round(dim_scores["revenue"], 4),
-        "general_score": round(dim_scores["general"], 4),
-        "cost_potential_usd": round(potential_dollars["cost"], 2),
-        "cost_actual_usd": round(actual_dollars["cost"], 2),
-        "revenue_potential_usd": round(potential_dollars["revenue"], 2),
-        "revenue_actual_usd": round(actual_dollars["revenue"], 2),
-        "general_potential_usd": round(potential_dollars["general"], 2),
-        "general_actual_usd": round(actual_dollars["general"], 2),
+        "cost_score": round(dim_scores[TargetDimension.COST], 4),
+        "revenue_score": round(dim_scores[TargetDimension.REVENUE], 4),
+        "general_score": round(dim_scores[TargetDimension.GENERAL], 4),
+        "cost_potential_usd": round(potential_dollars[TargetDimension.COST], 2),
+        "cost_actual_usd": round(actual_dollars[TargetDimension.COST], 2),
+        "revenue_potential_usd": round(potential_dollars[TargetDimension.REVENUE], 2),
+        "revenue_actual_usd": round(actual_dollars[TargetDimension.REVENUE], 2),
+        "general_potential_usd": round(potential_dollars[TargetDimension.GENERAL], 2),
+        "general_actual_usd": round(actual_dollars[TargetDimension.GENERAL], 2),
         "total_groups": len(final_valuations),
         "groups_by_type": {
-            "plan": sum(1 for v in final_valuations if v.evidence_type == "plan"),
-            "investment": sum(1 for v in final_valuations if v.evidence_type == "investment"),
-            "capture": sum(1 for v in final_valuations if v.evidence_type == "capture"),
+            "plan": sum(1 for v in final_valuations if v.evidence_type == ValuationEvidenceType.PLAN),
+            "investment": sum(1 for v in final_valuations if v.evidence_type == ValuationEvidenceType.INVESTMENT),
+            "capture": sum(1 for v in final_valuations if v.evidence_type == ValuationEvidenceType.CAPTURE),
         },
     }
 

@@ -8,8 +8,9 @@ classified by target dimension (cost/revenue/general) and capture stage
 
 import json
 import logging
+import re as _re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -21,6 +22,7 @@ from ai_opportunity_index.config import (
     WEB_SCRAPE_RATE_LIMIT_SECONDS,
     get_google_provider,
 )
+from ai_opportunity_index.domains import CollectedItem, SourceAuthority, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,38 @@ _HEADERS = {
 MAX_TEXT_CHARS = 15_000
 
 
+def _extract_page_date(response, soup) -> tuple[date | None, dict]:
+    """Try to extract the content creation date from HTTP headers and HTML meta."""
+    meta = {}
+    meta["http_last_modified"] = response.headers.get("Last-Modified")
+    meta["http_date"] = response.headers.get("Date")
+
+    # Open Graph / article meta tags
+    for tag in soup.find_all("meta", property=_re.compile(r"(og:published_time|article:published_time)")):
+        meta["og_published_time"] = tag.get("content")
+    # JSON-LD structured data
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            ld = json.loads(script.string)
+            if isinstance(ld, dict) and "datePublished" in ld:
+                meta["jsonld_date_published"] = ld["datePublished"]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # URL date pattern (e.g. /2024/03/post-title)
+    m = _re.search(r"/(\d{4})/(\d{2})/", str(response.url))
+    if m:
+        meta["url_date_pattern"] = f"{m.group(1)}-{m.group(2)}"
+
+    # Priority: JSON-LD > OG > URL pattern > Last-Modified
+    for key in ("jsonld_date_published", "og_published_time", "url_date_pattern", "http_last_modified"):
+        if meta.get(key):
+            try:
+                return date.fromisoformat(str(meta[key])[:10]), meta
+            except (ValueError, TypeError):
+                pass
+    return None, meta
+
+
 def _fetch_and_condense(url: str) -> str | None:
     """Fetch a URL and return condensed visible text, or None on failure."""
     import requests
@@ -141,6 +175,34 @@ def _fetch_and_condense(url: str) -> str | None:
         text = text[:MAX_TEXT_CHARS]
 
     return text if text else None
+
+
+def _fetch_with_metadata(url: str) -> tuple[str | None, date | None, dict]:
+    """Fetch a URL, return (condensed_text, source_date, date_metadata)."""
+    import requests as _requests
+    from bs4 import BeautifulSoup
+
+    try:
+        resp = _requests.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning("HTTP fetch failed for %s: %s", url, e)
+        return None, None, {}
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    source_date, date_meta = _extract_page_date(resp, soup)
+
+    # Remove non-content elements
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg", "iframe"]):
+        tag.decompose()
+
+    text = soup.get_text(separator="\n", strip=True)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    text = "\n".join(lines)
+    if len(text) > MAX_TEXT_CHARS:
+        text = text[:MAX_TEXT_CHARS]
+
+    return (text if text else None), source_date, date_meta
 
 
 # ── LLM Extraction ───────────────────────────────────────────────────────
@@ -245,3 +307,48 @@ def fetch_web_enrichment(
         result["blog"] = scrape_blog_page(blog_url)
 
     return result
+
+
+# ── CollectedItem Conversion ────────────────────────────────────────────
+
+
+_WEB_SOURCE_TYPE_MAP = {
+    "careers": SourceType.WEB_CAREERS,
+    "ir": SourceType.WEB_IR,
+    "blog": SourceType.WEB_BLOG,
+}
+
+
+def web_page_to_collected_item(
+    url: str,
+    page_type: str,  # "careers", "ir", or "blog"
+    ticker: str,
+    company_name: str,
+) -> CollectedItem | None:
+    """Fetch a web page and return a CollectedItem with content and date metadata.
+
+    Returns None if the page cannot be fetched.
+    """
+    text, source_date, date_meta = _fetch_with_metadata(url)
+    if not text:
+        return None
+
+    today = date.today()
+    return CollectedItem(
+        item_id=url,
+        title=f"{company_name} {page_type} page",
+        content=text,
+        author=company_name,
+        author_role="corporate communications",
+        author_affiliation=company_name,
+        publisher=company_name,
+        url=url,
+        source_date=source_date,
+        access_date=today,
+        authority=SourceAuthority.FIRST_PARTY_PUBLIC,
+        metadata={
+            "page_type": page_type,
+            "text_length": len(text),
+            **{k: v for k, v in date_meta.items() if v is not None},
+        },
+    )

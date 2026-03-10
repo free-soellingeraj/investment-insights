@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 import requests
@@ -12,6 +13,7 @@ from ai_opportunity_index.config import (
     SEC_RATE_LIMIT_SECONDS,
     SEC_USER_AGENT,
 )
+from ai_opportunity_index.domains import CollectedItem, SourceAuthority
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +22,19 @@ EDGAR_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 EDGAR_FULL_TEXT_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{filename}"
 
 
-def get_company_filings(cik: int, filing_type: str = "10-K", count: int = 5) -> list[dict]:
+def get_company_filings(
+    cik: int,
+    filing_type: str = "10-K",
+    count: int = 5,
+    since_date: datetime | None = None,
+) -> list[dict]:
     """Fetch recent filing metadata for a company from EDGAR.
 
     Args:
         cik: Central Index Key for the company.
         filing_type: Type of filing (10-K, 10-Q, 8-K).
         count: Maximum number of filings to return.
+        since_date: If set, only return filings filed after this date.
 
     Returns:
         List of dicts with keys: accession_number, filing_date, primary_document, form.
@@ -47,14 +55,19 @@ def get_company_filings(cik: int, filing_type: str = "10-K", count: int = 5) -> 
     dates = recent.get("filingDate", [])
     primary_docs = recent.get("primaryDocument", [])
 
+    since_str = since_date.strftime("%Y-%m-%d") if since_date else None
+
     filings = []
     for i, form in enumerate(forms):
         if form == filing_type and len(filings) < count:
+            filing_date_str = dates[i]
+            if since_str and filing_date_str < since_str:
+                continue
             filings.append(
                 {
                     "accession_number": accessions[i].replace("-", ""),
                     "accession_raw": accessions[i],
-                    "filing_date": dates[i],
+                    "filing_date": filing_date_str,
                     "primary_document": primary_docs[i],
                     "form": form,
                 }
@@ -162,3 +175,49 @@ def extract_filing_sections(text: str) -> dict[str, str]:
         sections[name] = text[start:end][:50000]
 
     return sections
+
+
+def filing_to_collected_item(
+    filing_meta: dict,
+    cik: int,
+    ticker: str,
+    company_name: str,
+    content: str | None = None,
+) -> CollectedItem:
+    """Convert a filing metadata dict + text to a CollectedItem."""
+    accession = filing_meta.get("accession_raw", filing_meta.get("accession_number", ""))
+    filing_date_str = filing_meta.get("filing_date", "")
+    form_type = filing_meta.get("form", "10-K")
+    primary_doc = filing_meta.get("primary_document", "")
+
+    source_date = None
+    if filing_date_str:
+        try:
+            source_date = date.fromisoformat(filing_date_str[:10])
+        except (ValueError, TypeError):
+            pass
+
+    url = ""
+    if cik and accession:
+        acc_num = accession.replace("-", "")
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{primary_doc}"
+
+    return CollectedItem(
+        item_id=accession or f"{ticker}_{form_type}_{filing_date_str}",
+        title=f"{form_type} Filing ({filing_date_str})",
+        content=content,
+        author=company_name,
+        author_role="corporate filer",
+        author_affiliation=company_name,
+        publisher="SEC EDGAR",
+        url=url or None,
+        source_date=source_date,
+        access_date=date.today(),
+        authority=SourceAuthority.FIRST_PARTY_DISCLOSURE,
+        metadata={
+            "filing_type": form_type,
+            "accession_number": accession,
+            "cik": cik,
+            "primary_document": primary_doc,
+        },
+    )

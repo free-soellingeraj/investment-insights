@@ -8,8 +8,13 @@ Evidence sources:
 - News articles (Google News RSS, GNews API, SEC EDGAR EFTS)
 - Patent data (USPTO PatentsView API)
 - Job postings (Adzuna API)
+- GitHub organization signals
+- Analyst consensus data (Yahoo Finance)
+- Web enrichment (careers, IR, blog pages)
 
-Cached data is stored as JSON files per company under data/raw/.
+Collected data is stored in two layouts:
+1. Legacy: data/raw/{source_type}/{TICKER}.json (backward compat)
+2. Unified: data/raw/sources/{TICKER}/{source_type}/{YYYY}/{MM}/{uuid}.json
 """
 
 import argparse
@@ -29,8 +34,16 @@ from ai_opportunity_index.config import (
     PATENTSVIEW_API_KEY,
     PRODUCT_NEWS_LOOKBACK_DAYS,
     RAW_DIR,
+    SOURCES_DIR,
 )
-from ai_opportunity_index.domains import PipelineRun, PipelineSubtask, PipelineTask
+from ai_opportunity_index.domains import (
+    CollectedItem,
+    CollectionManifest,
+    PipelineRun,
+    PipelineSubtask,
+    PipelineTask,
+    SourceType,
+)
 from ai_opportunity_index.storage.db import (
     complete_pipeline_run,
     create_pipeline_run,
@@ -53,11 +66,100 @@ ANALYST_CACHE_DIR = RAW_DIR / "analysts"
 WEB_ENRICHMENT_CACHE_DIR = RAW_DIR / "web_enrichment"
 
 
+# ── Unified file-per-item helpers ─────────────────────────────────────────
+
+
+def _item_dir(ticker: str, source_type: SourceType, item: CollectedItem) -> Path:
+    """Compute the directory path for a CollectedItem."""
+    d = item.source_date or item.access_date
+    if d:
+        return SOURCES_DIR / ticker.upper() / source_type.value / str(d.year) / f"{d.month:02d}"
+    return SOURCES_DIR / ticker.upper() / source_type.value / "undated"
+
+
+def _existing_item_ids(directory: Path) -> set[str]:
+    """Read item_ids from existing JSON files in a directory."""
+    ids: set[str] = set()
+    if not directory.exists():
+        return ids
+    for p in directory.glob("*.json"):
+        if p.name.startswith("_"):
+            continue
+        try:
+            data = json.loads(p.read_text())
+            if "item_id" in data:
+                ids.add(data["item_id"])
+        except Exception:
+            pass
+    return ids
+
+
+def write_collected_items(
+    ticker: str,
+    source_type: SourceType,
+    items: list[CollectedItem],
+    company_name: str | None = None,
+    since_date: datetime | None = None,
+) -> int:
+    """Write CollectedItem objects to the unified file layout.
+
+    Deduplicates by item_id against existing files in the target directories.
+    Returns count of new items written.
+    """
+    if not items:
+        return 0
+
+    # Collect all unique target directories
+    dir_cache: dict[str, set[str]] = {}
+    written = 0
+    new_item_ids: list[str] = []
+
+    for item in items:
+        target_dir = _item_dir(ticker, source_type, item)
+        dir_key = str(target_dir)
+        if dir_key not in dir_cache:
+            dir_cache[dir_key] = _existing_item_ids(target_dir)
+
+        if item.item_id in dir_cache[dir_key]:
+            continue
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid.uuid4()}.json"
+        filepath = target_dir / filename
+        filepath.write_text(item.model_dump_json(indent=2))
+        dir_cache[dir_key].add(item.item_id)
+        new_item_ids.append(item.item_id)
+        written += 1
+
+    # Write manifest
+    if written > 0:
+        # Pick the most common directory for the manifest
+        manifest_dir = SOURCES_DIR / ticker.upper() / source_type.value
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest = CollectionManifest(
+            ticker=ticker,
+            company_name=company_name,
+            source_type=source_type,
+            collected_at=datetime.utcnow(),
+            since_date=since_date,
+            items_found=written,
+            item_ids=new_item_ids,
+        )
+        manifest_path = manifest_dir / "_manifest.json"
+        manifest_path.write_text(manifest.model_dump_json(indent=2))
+
+    return written
+
+
+# ── Collectors (write to both legacy + unified layout) ────────────────────
+
+
 def collect_news(
     companies: list[CompanyModel],
     days_back: int = PRODUCT_NEWS_LOOKBACK_DAYS,
     news_api_key: str | None = None,
     force: bool = False,
+    since_date: datetime | None = None,
 ):
     """Fetch and cache news articles for each company."""
     from ai_opportunity_index.data.news_signals import search_company_news
@@ -69,18 +171,33 @@ def collect_news(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = NEWS_CACHE_DIR / f"{ticker.upper()}.json"
 
-        if cache_is_fresh(cache_path, "collect_news", force=force):
+        if not force and cache_is_fresh(cache_path, "collect_news", force=force):
             skipped += 1
             continue
 
         name = company.company_name or ticker
         try:
-            articles = search_company_news(
-                name, ticker, days_back=days_back, api_key=news_api_key
+            items = search_company_news(
+                name, ticker, days_back=days_back, api_key=news_api_key,
+                since_date=since_date,
             )
+            # Write unified layout
+            write_collected_items(ticker, SourceType.NEWS, items, company_name=name, since_date=since_date)
+
+            # Legacy layout (backward compat)
+            articles = [
+                {
+                    "title": item.title,
+                    "description": item.metadata.get("description", ""),
+                    "url": item.url,
+                    "published_at": item.source_date.isoformat() if item.source_date else "",
+                    "source": item.publisher or "",
+                }
+                for item in items
+            ]
             data = stamp_cache({
                 "ticker": ticker,
                 "company_name": name,
@@ -133,7 +250,7 @@ def collect_patents(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = PATENT_CACHE_DIR / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "collect_news", force=force):
@@ -225,7 +342,7 @@ def collect_jobs(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = JOB_CACHE_DIR / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "collect_news", force=force):
@@ -289,9 +406,10 @@ def collect_jobs(
 def collect_github(
     companies: list[CompanyModel],
     force: bool = False,
+    since_date: datetime | None = None,
 ):
     """Fetch and cache GitHub signals for each company."""
-    from ai_opportunity_index.data.github_signals import search_company_github
+    from ai_opportunity_index.data.github_signals import search_company_github, github_dict_to_collected_item
 
     GITHUB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -300,7 +418,7 @@ def collect_github(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = GITHUB_CACHE_DIR / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "collect_github", force=force):
@@ -309,9 +427,14 @@ def collect_github(
 
         name = company.company_name or ticker
         try:
-            data = search_company_github(name, ticker)
+            data = search_company_github(name, ticker, since_date=since_date)
             stamp_cache(data, "collect_github")
             cache_path.write_text(json.dumps(data, indent=2))
+
+            # Write unified layout
+            item = github_dict_to_collected_item(data)
+            write_collected_items(ticker, SourceType.GITHUB, [item], company_name=name, since_date=since_date)
+
             collected += 1
         except Exception as e:
             logger.warning("GitHub collection failed for %s: %s", ticker, e)
@@ -332,9 +455,10 @@ def collect_github(
 def collect_analysts(
     companies: list[CompanyModel],
     force: bool = False,
+    since_date: datetime | None = None,
 ):
     """Fetch and cache analyst consensus data for each company."""
-    from ai_opportunity_index.data.analyst_data import fetch_analyst_data
+    from ai_opportunity_index.data.analyst_data import fetch_analyst_data, analyst_dict_to_collected_item
 
     ANALYST_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -343,7 +467,7 @@ def collect_analysts(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = ANALYST_CACHE_DIR / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "collect_analysts", force=force):
@@ -354,6 +478,11 @@ def collect_analysts(
             data = fetch_analyst_data(ticker)
             stamp_cache(data, "collect_analysts")
             cache_path.write_text(json.dumps(data, indent=2))
+
+            # Write unified layout
+            item = analyst_dict_to_collected_item(data)
+            write_collected_items(ticker, SourceType.ANALYST, [item], company_name=company.company_name, since_date=since_date)
+
             collected += 1
         except Exception as e:
             logger.warning("Analyst collection failed for %s: %s", ticker, e)
@@ -383,7 +512,10 @@ def collect_web_enrichment(
     Reads URLs from the database (careers_url, ir_url, blog_url).
     Skips companies with no URLs.
     """
-    from ai_opportunity_index.data.web_enrichment import fetch_web_enrichment
+    from ai_opportunity_index.data.web_enrichment import (
+        fetch_web_enrichment,
+        web_page_to_collected_item,
+    )
 
     WEB_ENRICHMENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -393,7 +525,7 @@ def collect_web_enrichment(
     no_urls = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = WEB_ENRICHMENT_CACHE_DIR / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "collect_web_enrichment", force=force):
@@ -420,6 +552,19 @@ def collect_web_enrichment(
             )
             stamp_cache(data, "collect_web_enrichment")
             cache_path.write_text(json.dumps(data, indent=2))
+
+            # Write unified layout — one CollectedItem per page type
+            page_map = {
+                "careers": (careers_url, SourceType.WEB_CAREERS),
+                "ir": (ir_url, SourceType.WEB_IR),
+                "blog": (blog_url, SourceType.WEB_BLOG),
+            }
+            for page_type, (url, st) in page_map.items():
+                if url:
+                    item = web_page_to_collected_item(url, page_type, ticker, name)
+                    if item:
+                        write_collected_items(ticker, st, [item], company_name=name)
+
             collected += 1
         except Exception as e:
             logger.warning("Web enrichment collection failed for %s: %s", ticker, e)
@@ -454,7 +599,7 @@ async def collect_filing_extraction(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = RAW_DIR / "extracted_filings" / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "extract_filings", force=force):
@@ -503,7 +648,7 @@ async def collect_news_extraction(
     failed = 0
 
     for i, company in enumerate(companies):
-        ticker = company.ticker
+        ticker = company.ticker or company.slug
         cache_path = RAW_DIR / "extracted_news" / f"{ticker.upper()}.json"
 
         if cache_is_fresh(cache_path, "extract_news", force=force):
