@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -377,6 +377,21 @@ def munge_evidence(
 
     if not all_passages:
         logger.info("[%s] No extracted passages found for munging", ticker)
+        return []
+
+    # Pre-filter: drop passages older than 2 years (730 days)
+    cutoff_date = date.today() - timedelta(days=730)
+    before_count = len(all_passages)
+    all_passages = [
+        p for p in all_passages
+        if p.source_date is None or p.source_date >= cutoff_date
+    ]
+    dropped = before_count - len(all_passages)
+    if dropped:
+        logger.info("[%s] Dropped %d passages older than 2 years", ticker, dropped)
+
+    if not all_passages:
+        logger.info("[%s] No passages remain after age filter", ticker)
         return []
 
     # Count by source type for logging
