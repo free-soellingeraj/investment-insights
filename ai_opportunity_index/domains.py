@@ -17,6 +17,7 @@ class PipelineTask(str, Enum):
     EXTRACT = "extract"
     VALUE = "value"
     SCORE = "score"
+    PIPELINE = "pipeline"
 
 
 class PipelineSubtask(str, Enum):
@@ -96,6 +97,8 @@ class SourceAuthority(str, Enum):
     PROFESSIONAL_ANALYSIS = "professional_analysis"     # sell-side/buy-side analyst, rating agency
     THIRD_PARTY_JOURNALISM = "third_party_journalism"   # news article, investigative report
     AGGREGATED_CONSENSUS = "aggregated_consensus"       # consensus estimates, aggregated ratings
+    REGULATORY = "regulatory"                           # regulatory filings, government sources
+    MEDIA = "media"                                     # general media coverage
 
 
 class ValuationEvidenceType(str, Enum):
@@ -198,6 +201,7 @@ class RunType(str, Enum):
     FULL = "full"
     PARTIAL = "partial"
     REFRESH_REQUEST = "refresh_request"
+    WEB_TRIGGER = "web_trigger"
 
 
 class Company(BaseModel):
@@ -339,9 +343,22 @@ class CompanyScore(BaseModel):
     quadrant: Quadrant | None = None
     quadrant_label: str | None = None  # human-readable label derived from quadrant
     combined_rank: int | None = None
+    evidence_group_ids: list[int] = Field(default_factory=list)
+    valuation_ids: list[int] = Field(default_factory=list)
     flags: list[str] = Field(default_factory=list)
     data_as_of: datetime
     scored_at: datetime
+
+    @property
+    def score_age_days(self) -> int:
+        """Number of days since the score was computed."""
+        return (date.today() - self.scored_at.date()).days
+
+    @property
+    def is_stale(self) -> bool:
+        """True if the score is older than SCORE_STALENESS_CRITICAL_DAYS."""
+        from ai_opportunity_index.config import SCORE_STALENESS_CRITICAL_DAYS
+        return self.score_age_days > SCORE_STALENESS_CRITICAL_DAYS
 
 
 class PipelineRun(BaseModel):
@@ -517,6 +534,34 @@ class Valuation(BaseModel):
     plan_detail: PlanDetails | None = None
     investment_detail: InvestmentDetails | None = None
     capture_detail: CaptureDetails | None = None
+
+
+class SynthesizedProject(BaseModel):
+    """A discrete AI investment project synthesized from evidence groups.
+
+    Produced by the project synthesis LLM step, which merges related
+    evidence groups into named projects with clear targets and timelines.
+    """
+    id: int | None = None
+    company_id: int
+    pipeline_run_id: int | None = None
+    short_title: str                        # 5-8 word project name
+    description: str                        # 1-2 paragraph narrative
+    target_dimension: str                   # cost, revenue, general
+    target_subcategory: str                 # e.g., "infrastructure", "advertising"
+    target_detail: str = ""                 # specific cost center or product
+    status: str = "planned"                 # planned, in_progress, launched
+    dollar_total: float | None = None       # best-estimate total investment
+    dollar_low: float | None = None
+    dollar_high: float | None = None
+    confidence: float = 0.0                 # [0, 1]
+    evidence_count: int = 0                 # number of supporting passages
+    date_start: date | None = None          # earliest evidence
+    date_end: date | None = None            # latest evidence or projected end
+    technology_area: str = ""               # e.g., "GenAI", "ML platform"
+    deployment_scope: str = ""              # e.g., "enterprise-wide", "3 divisions"
+    evidence_group_ids: list[int] = Field(default_factory=list)
+    valuation_ids: list[int] = Field(default_factory=list)
 
 
 class ValuationDiscrepancy(BaseModel):

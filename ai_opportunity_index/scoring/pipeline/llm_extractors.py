@@ -12,7 +12,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator
 
-from ai_opportunity_index.config import LLM_EXTRACTION_MODEL
 from ai_opportunity_index.domains import CaptureStage, TargetDimension
 
 
@@ -82,22 +81,9 @@ class LLMFilingExtractor(EvidenceExtractor):
     """Extract AI evidence from SEC filings using LLM analysis."""
 
     def __init__(self):
-        try:
-            from pydantic_ai import Agent
-            from pydantic_ai.models.google import GoogleModel
+        from ai_opportunity_index.llm_backend import get_agent
 
-            from ai_opportunity_index.config import get_google_provider
-
-            model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-            self.agent = Agent(
-                model,
-                output_type=ExtractedPassages,
-            )
-        except ImportError:
-            raise ImportError(
-                "pydantic-ai is required for LLM extractors. "
-                "Install with: pip install pydantic-ai"
-            )
+        self.agent = get_agent(output_type=ExtractedPassages)
 
     def extract(
         self,
@@ -134,22 +120,9 @@ class LLMNewsExtractor(EvidenceExtractor):
     """Extract AI evidence from news articles using LLM analysis."""
 
     def __init__(self):
-        try:
-            from pydantic_ai import Agent
-            from pydantic_ai.models.google import GoogleModel
+        from ai_opportunity_index.llm_backend import get_agent
 
-            from ai_opportunity_index.config import get_google_provider
-
-            model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-            self.agent = Agent(
-                model,
-                output_type=ExtractedPassages,
-            )
-        except ImportError:
-            raise ImportError(
-                "pydantic-ai is required for LLM extractors. "
-                "Install with: pip install pydantic-ai"
-            )
+        self.agent = get_agent(output_type=ExtractedPassages)
 
     def extract(
         self,

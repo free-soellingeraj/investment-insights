@@ -53,12 +53,9 @@ async def exec_discover_links(
                             changed = True
                     if changed:
                         session.commit()
-                    else:
-                        session.close()
-                else:
-                    session.close()
             except Exception:
                 session.rollback()
+            finally:
                 session.close()
 
         logger.info("[%s] discover_links done", ticker)
@@ -216,14 +213,40 @@ async def exec_value_evidence(
     logger.info("[%s] value_evidence starting", ticker)
     try:
         from ai_opportunity_index.scoring.evidence_valuation import value_evidence_for_company
-        from ai_opportunity_index.storage.db import get_final_valuations_for_company, get_latest_financials
+        from ai_opportunity_index.storage.db import get_latest_financials
 
-        # Skip if valuations already exist (expensive LLM stage)
+        # Skip only if ALL evidence groups have final valuations (not just "any exist")
         if not force:
-            existing = get_final_valuations_for_company(company.id)
-            if existing:
-                logger.info("[%s] value_evidence skipped: %d valuations already exist", ticker, len(existing))
+            from ai_opportunity_index.storage.models import EvidenceGroupModel, ValuationModel
+            from sqlalchemy import select, func as sa_func
+            skip_session = get_session()
+            try:
+                total_groups = skip_session.execute(
+                    select(sa_func.count()).select_from(EvidenceGroupModel)
+                    .where(EvidenceGroupModel.company_id == company.id)
+                ).scalar() or 0
+                valued_groups = skip_session.execute(
+                    select(sa_func.count(sa_func.distinct(ValuationModel.group_id)))
+                    .join(EvidenceGroupModel)
+                    .where(
+                        EvidenceGroupModel.company_id == company.id,
+                        ValuationModel.stage == "final",
+                    )
+                ).scalar() or 0
+            finally:
+                skip_session.close()
+
+            if total_groups > 0 and valued_groups >= total_groups:
+                logger.info(
+                    "[%s] value_evidence skipped: all %d groups have final valuations",
+                    ticker, total_groups,
+                )
                 return StageResult("value_evidence", ticker, success=True, skipped=True)
+            elif valued_groups > 0:
+                logger.info(
+                    "[%s] value_evidence: %d/%d groups valued — re-running for remaining",
+                    ticker, valued_groups, total_groups,
+                )
 
         financials = get_latest_financials(company.id)
         revenue_obs = financials.get("revenue")

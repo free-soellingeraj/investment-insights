@@ -41,10 +41,11 @@ class PipelineRequest:
     since_date: datetime | None = None      # incremental mode
     source: TriggerSource = TriggerSource.CLI
     max_concurrency: int = 20
-    llm_concurrency: int = 50
+    llm_concurrency: int = 8
     include_inactive: bool = False
     pipeline_run_id: int | None = None      # reuse existing run record
     limit: int | None = None
+    offset: int = 0
 
 
 class PipelineController:
@@ -104,6 +105,8 @@ class PipelineController:
                     CompanyModel.slug.in_(upper_tickers),
                 )
             )
+        if request.offset:
+            query = query.offset(request.offset)
         if request.limit:
             query = query.limit(request.limit)
         companies = query.all()

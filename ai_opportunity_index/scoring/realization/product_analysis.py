@@ -12,10 +12,7 @@ import json
 import logging
 
 from ai_opportunity_index.config import (
-    LLM_EXTRACTION_MODEL,
-    PRODUCT_NEWS_LOOKBACK_DAYS,
     RAW_DIR,
-    get_google_provider,
 )
 from ai_opportunity_index.prompts.loader import load_prompt
 from ai_opportunity_index.scoring.evidence_classification import (
@@ -56,34 +53,31 @@ def _load_cached_articles(ticker: str) -> list[dict] | None:
 
 
 def _get_agent():
-    """Lazy-init pydantic_ai agent for news extraction."""
-    from pydantic_ai import Agent
-    from pydantic_ai.models.google import GoogleModel
-
+    """Lazy-init LLM agent for news extraction."""
+    from ai_opportunity_index.llm_backend import get_agent
     from ai_opportunity_index.scoring.pipeline.llm_extractors import ExtractedPassages
 
-    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-    return Agent(model, output_type=ExtractedPassages)
+    return get_agent(output_type=ExtractedPassages)
 
 
 def analyze_company_products_classified(
     company_name: str,
     ticker: str,
-) -> ClassifiedScorerOutput:
+) -> ClassifiedScorerOutput | None:
     """Analyze a company's AI product activity with cost/revenue/general classification.
 
     Reads from data/raw/news/{TICKER}.json (collected by collect_evidence.py).
     Uses Gemini Flash to classify each article.
 
-    Returns ClassifiedScorerOutput.
+    Returns ClassifiedScorerOutput, or None if no data available.
     """
     articles = _load_cached_articles(ticker)
     if articles is None:
-        logger.debug("No cached news for %s; returning zero score", ticker)
-        articles = []
+        logger.debug("No cached news for %s; returning None", ticker)
+        return None
 
     if not articles:
-        return ClassifiedScorerOutput(overall_score=0.0)
+        return None
 
     agent = _get_agent()
     evidence_items: list[ClassifiedEvidence] = []
@@ -164,19 +158,20 @@ async def analyze_company_products_classified_async(
     company_name: str,
     ticker: str,
     semaphore: asyncio.Semaphore | None = None,
-) -> ClassifiedScorerOutput:
+) -> ClassifiedScorerOutput | None:
     """Async version of analyze_company_products_classified.
 
     Processes all articles concurrently with asyncio.gather().
     An optional semaphore gates concurrent LLM calls.
+    Returns None if no data available.
     """
     articles = _load_cached_articles(ticker)
     if articles is None:
-        logger.debug("No cached news for %s; returning zero score", ticker)
-        articles = []
+        logger.debug("No cached news for %s; returning None", ticker)
+        return None
 
     if not articles:
-        return ClassifiedScorerOutput(overall_score=0.0)
+        return None
 
     agent = _get_agent()
 

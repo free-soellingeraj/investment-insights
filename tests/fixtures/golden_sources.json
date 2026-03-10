@@ -1,0 +1,357 @@
+{
+  "description": "Golden source documents with hand-labeled expected evidence extractions for the AI Opportunity Index scoring pipeline. Each case contains a realistic source text and the evidence that a correct extraction pipeline should produce.",
+  "schema_notes": {
+    "target_dimension": "cost | revenue | general",
+    "capture_stage": "planned | invested | realized",
+    "signal_strength": "high | medium | low",
+    "evidence_source_type": "filing_nlp | patent | product | job | revenue_opportunity | cost_opportunity | subsidiary_discovery | web_enrichment | github | analyst",
+    "valuation_evidence_type": "plan | investment | capture",
+    "source_authority": "first_party_disclosure | first_party_public | first_party_code | professional_analysis | third_party_journalism | aggregated_consensus"
+  },
+  "cases": [
+    {
+      "id": "gs-001",
+      "title": "10-K filing: realized AI cost savings with specific dollar amounts",
+      "source_type": "filing_nlp",
+      "source_authority": "first_party_disclosure",
+      "source_name": "Meridian Logistics Corp 10-K FY2025",
+      "source_date": "2026-01-28",
+      "company": {
+        "ticker": "MRLG",
+        "company_name": "Meridian Logistics Corp",
+        "sector": "Industrials",
+        "industry": "Air Freight & Logistics",
+        "revenue": 8200000000,
+        "employees": 42000
+      },
+      "source_text": "During fiscal year 2025, our AI-powered route optimization platform, deployed across all 14 North American distribution hubs, reduced average last-mile delivery costs by 18%, yielding approximately $147 million in annualized savings compared to the prior year. The platform leverages proprietary machine learning models trained on 4.2 billion historical shipment records and real-time traffic data. We invested approximately $62 million in compute infrastructure, model development, and integration engineering over the two-year deployment period. Management expects incremental savings of $30-50 million annually as the system is extended to our European operations in fiscal 2026.",
+      "expected_evidence": [
+        {
+          "target_dimension": "cost",
+          "capture_stage": "realized",
+          "signal_strength": "high",
+          "valuation_evidence_type": "capture",
+          "dollar_estimate_low": 120000000,
+          "dollar_estimate_high": 170000000,
+          "reasoning": "Company explicitly quantifies $147M in annualized cost savings from AI route optimization, with clear before/after metrics (18% reduction). First-party disclosure in a 10-K filing provides high credibility. The dollar figure is specific and material relative to $8.2B revenue."
+        },
+        {
+          "target_dimension": "cost",
+          "capture_stage": "invested",
+          "signal_strength": "high",
+          "valuation_evidence_type": "investment",
+          "dollar_estimate_low": 50000000,
+          "dollar_estimate_high": 75000000,
+          "reasoning": "The paragraph also discloses $62M in cumulative AI investment (compute, model development, integration) over two years. This is a concrete, quantified investment figure from a legal filing."
+        },
+        {
+          "target_dimension": "cost",
+          "capture_stage": "planned",
+          "signal_strength": "medium",
+          "valuation_evidence_type": "plan",
+          "dollar_estimate_low": 30000000,
+          "dollar_estimate_high": 50000000,
+          "reasoning": "Management projects $30-50M in additional savings from European expansion. This is a forward-looking estimate with a stated range, making it a medium-confidence plan."
+        }
+      ]
+    },
+    {
+      "id": "gs-002",
+      "title": "10-K filing: vague AI product revenue opportunity (planned, no specifics)",
+      "source_type": "filing_nlp",
+      "source_authority": "first_party_disclosure",
+      "source_name": "Cascade Health Systems 10-K FY2025",
+      "source_date": "2025-11-15",
+      "company": {
+        "ticker": "CSHS",
+        "company_name": "Cascade Health Systems",
+        "sector": "Healthcare",
+        "industry": "Health Care Equipment & Supplies",
+        "revenue": 3400000000,
+        "employees": 18500
+      },
+      "source_text": "We believe artificial intelligence and machine learning technologies present a significant long-term growth opportunity for our diagnostic imaging product line. The Company is exploring the integration of AI-assisted detection algorithms into our next-generation radiology workstations, which we expect to begin commercializing in the second half of fiscal 2027. While we cannot predict the timing or magnitude of revenue from these initiatives, we believe AI-enhanced diagnostics could expand our total addressable market. We have established an internal AI research group and plan to increase our R&D investment in this area.",
+      "expected_evidence": [
+        {
+          "target_dimension": "revenue",
+          "capture_stage": "planned",
+          "signal_strength": "low",
+          "valuation_evidence_type": "plan",
+          "dollar_estimate_low": 0,
+          "dollar_estimate_high": 170000000,
+          "reasoning": "The language is aspirational with no quantified dollar amounts ('significant long-term growth opportunity,' 'could expand our total addressable market'). The company explicitly disclaims ability to predict timing or magnitude. Commercialization is 18+ months away. Low specificity but the strategic intent is clear. Dollar range is wide because no anchoring figures are provided; upper bound estimated as ~5% revenue penetration for a major product line extension."
+        }
+      ]
+    },
+    {
+      "id": "gs-003",
+      "title": "Earnings call transcript: AI hiring and team build-out",
+      "source_type": "filing_nlp",
+      "source_authority": "first_party_disclosure",
+      "source_name": "NovaPay Inc Q3 2025 Earnings Call Transcript",
+      "source_date": "2025-10-22",
+      "company": {
+        "ticker": "NPAY",
+        "company_name": "NovaPay Inc",
+        "sector": "Financials",
+        "industry": "Transaction & Payment Processing Services",
+        "revenue": 6100000000,
+        "employees": 31000
+      },
+      "source_text": "On the AI talent front, we've grown our dedicated machine learning engineering team from 45 to approximately 180 people over the past four quarters, including several senior hires from leading AI labs. Our Chief AI Officer, who joined us from DeepMind in January, is leading the build-out of our fraud detection and personalization models. We've committed roughly $85 million in annualized compensation and infrastructure for this expanded AI organization, and we expect to reach 250 AI specialists by the end of fiscal 2026.",
+      "expected_evidence": [
+        {
+          "target_dimension": "general",
+          "capture_stage": "invested",
+          "signal_strength": "high",
+          "valuation_evidence_type": "investment",
+          "dollar_estimate_low": 70000000,
+          "dollar_estimate_high": 100000000,
+          "reasoning": "Company quantifies $85M annualized spend on AI team (compensation + infrastructure) and provides headcount specifics (45 to 180, targeting 250). The hire of a Chief AI Officer from DeepMind signals serious organizational commitment. Concrete dollar commitment from an earnings call is high-signal investment evidence."
+        }
+      ]
+    },
+    {
+      "id": "gs-004",
+      "title": "News article: AI product launch announcement",
+      "source_type": "filing_nlp",
+      "source_authority": "third_party_journalism",
+      "source_name": "TechCrunch - Apex Software Launches AI Code Assistant",
+      "source_date": "2025-12-03",
+      "company": {
+        "ticker": "APEX",
+        "company_name": "Apex Software Corp",
+        "sector": "Technology",
+        "industry": "Software - Application",
+        "revenue": 12500000000,
+        "employees": 55000
+      },
+      "source_text": "Apex Software today launched CodePilot AI, a generative AI-powered code assistant that integrates directly into the company's flagship IDE platform used by over 9 million developers worldwide. The product, priced at $19 per user per month for individual licenses and $39 per user per month for enterprise tiers, enters a rapidly growing market currently dominated by GitHub Copilot and Amazon CodeWhisperer. Industry analysts estimate the AI code assistant market will reach $14 billion by 2028. Apex CEO Sarah Chen told TechCrunch the company expects CodePilot AI to reach 500,000 paying subscribers within 18 months of launch.",
+      "expected_evidence": [
+        {
+          "target_dimension": "revenue",
+          "capture_stage": "invested",
+          "signal_strength": "high",
+          "valuation_evidence_type": "capture",
+          "dollar_estimate_low": 90000000,
+          "dollar_estimate_high": 240000000,
+          "reasoning": "Concrete product with specific pricing ($19-$39/user/month) and a stated subscriber target (500K in 18 months). At 500K subscribers and blended $25/month, that implies ~$150M ARR. The product is launched (not planned), has clear monetization, and addresses a large installed base of 9M developers. High signal because it is a shipped product with pricing and targets, though third-party source reduces authority slightly vs. a filing."
+        }
+      ]
+    },
+    {
+      "id": "gs-005",
+      "title": "Analyst report: quantified AI revenue estimates",
+      "source_type": "analyst",
+      "source_authority": "professional_analysis",
+      "source_name": "Goldman Sachs Equity Research - Titan Cloud Infrastructure",
+      "source_date": "2026-02-10",
+      "company": {
+        "ticker": "TCLD",
+        "company_name": "Titan Cloud Infrastructure Inc",
+        "sector": "Technology",
+        "industry": "Software - Infrastructure",
+        "revenue": 42000000000,
+        "employees": 135000
+      },
+      "source_text": "We estimate Titan Cloud's AI and machine learning services (including TitanML, AI-optimized compute instances, and managed inference endpoints) generated approximately $6.8 billion in revenue in CY2025, up 74% year-over-year. We project this segment to reach $11.5-$13.2 billion in CY2026 as enterprise adoption of large language models accelerates GPU demand. Our AI revenue estimates represent approximately 16% of total company revenue in CY2025 and we expect this share to expand to 22-25% by CY2027. We maintain our Overweight rating with a 12-month price target of $245, reflecting a sum-of-parts valuation that assigns a premium multiple to the AI segment.",
+      "expected_evidence": [
+        {
+          "target_dimension": "revenue",
+          "capture_stage": "realized",
+          "signal_strength": "high",
+          "valuation_evidence_type": "capture",
+          "dollar_estimate_low": 6000000000,
+          "dollar_estimate_high": 7500000000,
+          "reasoning": "Analyst provides a specific CY2025 AI revenue estimate of $6.8B with 74% YoY growth. Professional analysis from a top-tier sell-side firm with detailed segment-level modeling. High specificity with exact dollar figures, growth rates, and revenue share percentages."
+        },
+        {
+          "target_dimension": "revenue",
+          "capture_stage": "planned",
+          "signal_strength": "high",
+          "valuation_evidence_type": "plan",
+          "dollar_estimate_low": 11500000000,
+          "dollar_estimate_high": 13200000000,
+          "reasoning": "Forward-looking CY2026 projection of $11.5-$13.2B in AI revenue, with a clear stated range. Professional analyst projection grounded in segment-level analysis. Classified as plan because it is a future estimate, though high specificity because a concrete dollar range is given."
+        }
+      ]
+    },
+    {
+      "id": "gs-006",
+      "title": "Careers page: AI/ML job postings indicating investment",
+      "source_type": "web_enrichment",
+      "source_authority": "first_party_public",
+      "source_name": "Redwood Financial Group Careers Page",
+      "source_date": "2026-01-20",
+      "company": {
+        "ticker": "RWFG",
+        "company_name": "Redwood Financial Group",
+        "sector": "Financials",
+        "industry": "Capital Markets",
+        "revenue": 15800000000,
+        "employees": 48000
+      },
+      "source_text": "Redwood Financial is currently hiring for 23 open positions in our AI & Machine Learning division, including Senior ML Engineers, an NLP Research Scientist, a Head of Responsible AI, and multiple Data Scientists focused on algorithmic trading and risk modeling. Our AI team, based in New York and London, builds models that power real-time credit risk assessment, trade execution optimization, and client portfolio analytics. We offer competitive compensation with total packages ranging from $250K to $650K for senior technical roles.",
+      "expected_evidence": [
+        {
+          "target_dimension": "general",
+          "capture_stage": "invested",
+          "signal_strength": "low",
+          "valuation_evidence_type": "investment",
+          "dollar_estimate_low": 5000000,
+          "dollar_estimate_high": 15000000,
+          "reasoning": "23 AI/ML job openings with specific role titles indicate active investment in AI capabilities. The presence of a Head of Responsible AI role suggests organizational maturity. However, job postings are a weak signal compared to financial disclosures: postings may not all be filled, and total team size and budget are not disclosed. Dollar estimate derived from 23 roles at avg $250-$650K compensation yields ~$5.75M-$15M in incremental annual hiring cost. Low signal strength because this is indirect evidence from a careers page, not a financial commitment disclosure."
+        }
+      ]
+    },
+    {
+      "id": "gs-007",
+      "title": "GitHub profile: active ML repositories indicating technical investment",
+      "source_type": "github",
+      "source_authority": "first_party_code",
+      "source_name": "GitHub Organization - Vanguard Robotics (github.com/vanguard-robotics)",
+      "source_date": "2026-02-01",
+      "company": {
+        "ticker": "VGRB",
+        "company_name": "Vanguard Robotics Inc",
+        "sector": "Industrials",
+        "industry": "Industrial Machinery & Supplies",
+        "revenue": 2100000000,
+        "employees": 8500
+      },
+      "source_text": "The vanguard-robotics GitHub organization has 47 public repositories, of which 12 are tagged with machine-learning or deep-learning topics. The most active ML repository, 'perception-stack', has 340 stars, 89 forks, and 1,247 commits in the past year from 18 contributors. Other notable repositories include 'motion-planning-transformer' (a transformer-based motion planning library with 156 stars), 'sim2real-toolkit' (simulation-to-real transfer tools), and 'safety-verification-ml' (formal verification for neural network controllers). The organization shows consistent commit activity across ML repos with an average of 23 commits per week over the trailing 12 months.",
+      "expected_evidence": [
+        {
+          "target_dimension": "general",
+          "capture_stage": "invested",
+          "signal_strength": "medium",
+          "valuation_evidence_type": "investment",
+          "dollar_estimate_low": 3000000,
+          "dollar_estimate_high": 8000000,
+          "reasoning": "12 active ML repositories with consistent commit activity (23 commits/week, 18 contributors on lead repo) demonstrate sustained technical investment in AI/ML. The repos cover core robotics AI capabilities (perception, motion planning, sim2real, safety verification), suggesting a serious engineering effort rather than exploratory side projects. Medium signal because open-source activity is a proxy for investment -- it reveals technical depth but not dollar commitment. Dollar estimate based on ~18 active ML contributors at $165K-$440K fully loaded cost."
+        }
+      ]
+    },
+    {
+      "id": "gs-008",
+      "title": "10-K filing: NO AI relevance (negative case)",
+      "source_type": "filing_nlp",
+      "source_authority": "first_party_disclosure",
+      "source_name": "Prairie Materials Corp 10-K FY2025",
+      "source_date": "2025-12-20",
+      "company": {
+        "ticker": "PRMC",
+        "company_name": "Prairie Materials Corp",
+        "sector": "Materials",
+        "industry": "Construction Materials",
+        "revenue": 1800000000,
+        "employees": 6200
+      },
+      "source_text": "Revenue for fiscal year 2025 increased 7.3% to $1.8 billion, driven primarily by higher average selling prices for aggregates and ready-mix concrete in our Western U.S. markets. Volume shipments of aggregates totaled 58.2 million tons, a 2.1% increase from the prior year, reflecting continued strength in residential and infrastructure construction activity. Gross margin expanded 140 basis points to 28.6% due to favorable pricing and operational efficiencies at our Boise and Salt Lake City plants. We incurred $42 million in capital expenditures primarily related to fleet replacement and plant maintenance.",
+      "expected_evidence": [],
+      "expected_evidence_notes": "This paragraph contains no reference to artificial intelligence, machine learning, or related technologies. The operational efficiencies mentioned are attributed to general operational improvements, not AI. A correct extraction pipeline should produce zero AI-related evidence from this text."
+    },
+    {
+      "id": "gs-009",
+      "title": "10-K filing: conflicting signals (cost savings claimed but increased AI spending)",
+      "source_type": "filing_nlp",
+      "source_authority": "first_party_disclosure",
+      "source_name": "Pinnacle Insurance Holdings 10-K FY2025",
+      "source_date": "2026-02-05",
+      "company": {
+        "ticker": "PINH",
+        "company_name": "Pinnacle Insurance Holdings",
+        "sector": "Financials",
+        "industry": "Insurance - Property & Casualty",
+        "revenue": 22000000000,
+        "employees": 67000
+      },
+      "source_text": "Our AI-driven claims processing platform reduced average claims handling time by 34% and decreased manual review costs by approximately $210 million in fiscal 2025. However, total technology spending increased by $380 million year-over-year, with $290 million of the increase attributable to AI infrastructure, model training compute costs, and the acquisition of DataSense AI, a claims analytics startup, for $165 million. Management believes the current elevated spending reflects a multi-year investment cycle, and that net cost benefits will materialize as the platform matures and is rolled out to our life insurance and specialty lines segments over the next two to three years.",
+      "expected_evidence": [
+        {
+          "target_dimension": "cost",
+          "capture_stage": "realized",
+          "signal_strength": "high",
+          "valuation_evidence_type": "capture",
+          "dollar_estimate_low": 180000000,
+          "dollar_estimate_high": 240000000,
+          "reasoning": "Clear quantification of $210M in cost savings from AI claims processing, with specific operational metrics (34% reduction in handling time). This is realized capture evidence with high specificity from a first-party legal filing."
+        },
+        {
+          "target_dimension": "cost",
+          "capture_stage": "invested",
+          "signal_strength": "high",
+          "valuation_evidence_type": "investment",
+          "dollar_estimate_low": 250000000,
+          "dollar_estimate_high": 330000000,
+          "reasoning": "The company discloses $290M in AI-attributable technology spending increase plus a $165M acquisition. Total AI-related investment is approximately $455M (though some overlap). Current year AI spending significantly exceeds current year savings, creating a negative near-term ROI. This is a discrepancy the valuation pipeline should flag: the company is currently a net AI investor rather than a net AI beneficiary, despite the realized savings."
+        },
+        {
+          "target_dimension": "cost",
+          "capture_stage": "planned",
+          "signal_strength": "medium",
+          "valuation_evidence_type": "plan",
+          "dollar_estimate_low": 100000000,
+          "dollar_estimate_high": 500000000,
+          "reasoning": "Management signals that net cost benefits will materialize over the next 2-3 years as the platform matures and extends to life and specialty lines. This is a forward-looking statement without specific dollar projections, yielding a wide estimate range. The wide range reflects uncertainty about how much incremental savings the extensions will produce beyond the current $210M baseline."
+        }
+      ],
+      "expected_discrepancy_notes": "This case should trigger a valuation discrepancy flag: the company reports $210M in AI cost savings but simultaneously increased AI-related spending by $455M ($290M opex + $165M acquisition). The net position is -$245M in the current year. The valuation pipeline should note this conflict and weigh whether the investment trajectory supports or undermines the savings narrative."
+    },
+    {
+      "id": "gs-010",
+      "title": "10-K filing: multi-signal paragraph producing BOTH cost and revenue evidence",
+      "source_type": "filing_nlp",
+      "source_authority": "first_party_disclosure",
+      "source_name": "Orion Digital Media 10-K FY2025",
+      "source_date": "2026-01-10",
+      "company": {
+        "ticker": "ODGM",
+        "company_name": "Orion Digital Media Inc",
+        "sector": "Communication Services",
+        "industry": "Interactive Media & Services",
+        "revenue": 18500000000,
+        "employees": 52000
+      },
+      "source_text": "Our generative AI content recommendation engine, deployed across all major surfaces in Q2 2025, drove a 12% increase in average user engagement time and contributed to an estimated $740 million in incremental advertising revenue during the second half of fiscal 2025 by improving ad targeting relevance scores by 22%. Simultaneously, the AI-powered content moderation system reduced our reliance on human content reviewers, enabling a workforce reduction of approximately 2,800 contractor positions and generating annualized cost savings of approximately $195 million. We invested $520 million in GPU compute clusters and model development during fiscal 2025 to support these AI initiatives, and we expect total AI infrastructure spending to reach $800 million in fiscal 2026 as we scale our large language model capabilities to support AI-generated content summaries and real-time translation features.",
+      "expected_evidence": [
+        {
+          "target_dimension": "revenue",
+          "capture_stage": "realized",
+          "signal_strength": "high",
+          "valuation_evidence_type": "capture",
+          "dollar_estimate_low": 650000000,
+          "dollar_estimate_high": 850000000,
+          "reasoning": "The company attributes $740M in incremental ad revenue to the AI recommendation engine, supported by specific engagement metrics (12% increase in engagement time, 22% improvement in ad targeting). This is a concrete, quantified revenue impact from a deployed AI system, disclosed in a legal filing. High specificity with clear causal attribution."
+        },
+        {
+          "target_dimension": "cost",
+          "capture_stage": "realized",
+          "signal_strength": "high",
+          "valuation_evidence_type": "capture",
+          "dollar_estimate_low": 160000000,
+          "dollar_estimate_high": 230000000,
+          "reasoning": "AI content moderation reduced 2,800 contractor positions, yielding $195M annualized cost savings. Specific headcount impact and dollar figure are provided. High signal from a first-party disclosure with clear before/after workforce data."
+        },
+        {
+          "target_dimension": "general",
+          "capture_stage": "invested",
+          "signal_strength": "high",
+          "valuation_evidence_type": "investment",
+          "dollar_estimate_low": 450000000,
+          "dollar_estimate_high": 600000000,
+          "reasoning": "The company discloses $520M in AI infrastructure and model development spending in FY2025. This is a concrete, quantified investment figure spanning both the revenue-generating recommendation engine and the cost-saving moderation system. Classified as general because the investment supports both cost and revenue dimensions simultaneously."
+        },
+        {
+          "target_dimension": "general",
+          "capture_stage": "planned",
+          "signal_strength": "medium",
+          "valuation_evidence_type": "plan",
+          "dollar_estimate_low": 700000000,
+          "dollar_estimate_high": 900000000,
+          "reasoning": "Management projects $800M in AI infrastructure spending for FY2026, an increase from $520M. While this is a spending plan (not a revenue/savings plan), it signals continued scaling commitment. The mention of new capabilities (content summaries, real-time translation) implies additional revenue opportunities but without quantification. Medium signal because it is a forward-looking spending commitment without quantified return expectations."
+        }
+      ]
+    }
+  ]
+}

@@ -57,6 +57,8 @@ from ai_opportunity_index.storage.models import (
     SubscriberModel,
     ValuationDiscrepancyModel,
     ValuationModel,
+    HumanRatingModel,
+    InvestmentProjectModel,
 )
 
 logger = logging.getLogger(__name__)
@@ -803,10 +805,10 @@ def create_pipeline_run(run: PipelineRun) -> PipelineRun:
     try:
         model = PipelineRunModel(
             run_id=run.run_id,
-            task=run.task,
-            subtask=run.subtask,
-            run_type=run.run_type,
-            status=run.status,
+            task=run.task.value if hasattr(run.task, 'value') else run.task,
+            subtask=run.subtask.value if hasattr(run.subtask, 'value') else run.subtask,
+            run_type=run.run_type.value if hasattr(run.run_type, 'value') else run.run_type,
+            status=run.status.value if hasattr(run.status, 'value') else run.status,
             parameters=run.parameters,
             tickers_requested=run.tickers_requested,
             tickers_succeeded=run.tickers_succeeded,
@@ -834,8 +836,10 @@ def complete_pipeline_run(
     """Mark a pipeline run as completed or failed."""
     session = get_session()
     try:
+        # Ensure enum values are stored as plain strings, not repr()
+        status_str = status.value if isinstance(status, RunStatus) else status
         values: dict = {
-            "status": status,
+            "status": status_str,
             "tickers_succeeded": tickers_succeeded,
             "tickers_failed": tickers_failed,
             "completed_at": datetime.utcnow(),
@@ -1977,6 +1981,11 @@ def get_evidence_groups_for_company(
                     capture_stage=p.capture_stage,
                     source_url=p.source_url,
                     source_author=p.source_author,
+                    source_author_role=p.source_author_role,
+                    source_author_affiliation=p.source_author_affiliation,
+                    source_publisher=p.source_publisher,
+                    source_access_date=p.source_access_date,
+                    source_authority=p.source_authority,
                 )
                 for p in m.passages
             ]
@@ -2039,7 +2048,9 @@ def delete_evidence_groups_for_company(
     """Delete evidence groups (and cascading valuations/passages) for a company.
 
     Deletes valuation_discrepancies first since they reference evidence_groups
-    without ON DELETE CASCADE.
+    without ON DELETE CASCADE.  Also nulls out evidence_group_ids on any
+    investment_projects that reference the groups being deleted, preventing
+    orphan references.
 
     Returns the number of groups deleted.
     """
@@ -2052,6 +2063,17 @@ def delete_evidence_groups_for_company(
         if pipeline_run_id is not None:
             disc_q = disc_q.filter(ValuationDiscrepancyModel.pipeline_run_id == pipeline_run_id)
         disc_q.delete(synchronize_session="fetch")
+
+        # Null out evidence_group_ids on investment_projects to prevent orphans
+        proj_q = s.query(InvestmentProjectModel).filter(
+            InvestmentProjectModel.company_id == company_id
+        )
+        if pipeline_run_id is not None:
+            proj_q = proj_q.filter(InvestmentProjectModel.pipeline_run_id == pipeline_run_id)
+        proj_q.update(
+            {InvestmentProjectModel.evidence_group_ids: None},
+            synchronize_session="fetch",
+        )
 
         # Now delete groups (valuations + passages cascade via ON DELETE CASCADE)
         q = s.query(EvidenceGroupModel).filter(
@@ -2415,3 +2437,151 @@ def _valuation_from_model(m: ValuationModel) -> Valuation:
         investment_detail=investment_detail,
         capture_detail=capture_detail,
     )
+
+
+# ── Human Ratings ─────────────────────────────────────────────────────────
+
+
+VALID_ENTITY_TYPES = {
+    "project", "evidence_group", "valuation", "company_score", "passage", "company",
+}
+VALID_DIMENSIONS = {
+    "accuracy", "relevance", "dollar_estimate", "quality", "overall",
+}
+VALID_ACTIONS = {
+    "flag_for_review", "mark_incorrect", "approve", "needs_more_evidence",
+}
+
+
+def create_human_rating(
+    entity_type: str,
+    entity_id: int,
+    rating: int | None = None,
+    dimension: str = "overall",
+    comment: str | None = None,
+    action: str | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    """Insert a human rating and return the created row as a dict."""
+    if entity_type not in VALID_ENTITY_TYPES:
+        raise ValueError(f"Invalid entity_type: {entity_type}")
+    if dimension not in VALID_DIMENSIONS:
+        raise ValueError(f"Invalid dimension: {dimension}")
+    if action and action not in VALID_ACTIONS:
+        raise ValueError(f"Invalid action: {action}")
+    if rating is not None and rating not in (-1, 0, 1, 2, 3, 4, 5):
+        raise ValueError(f"Invalid rating: {rating}")
+
+    session = get_session()
+    try:
+        m = HumanRatingModel(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            rating=rating,
+            dimension=dimension,
+            comment=comment,
+            action=action,
+            metadata_extra=metadata or {},
+        )
+        session.add(m)
+        session.commit()
+        session.refresh(m)
+        return _rating_to_dict(m)
+    finally:
+        session.close()
+
+
+def get_ratings_for_entity(entity_type: str, entity_id: int) -> list[dict]:
+    """Get all ratings for a specific entity, newest first."""
+    session = get_session()
+    try:
+        rows = (
+            session.execute(
+                select(HumanRatingModel)
+                .where(
+                    HumanRatingModel.entity_type == entity_type,
+                    HumanRatingModel.entity_id == entity_id,
+                )
+                .order_by(HumanRatingModel.created_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        return [_rating_to_dict(r) for r in rows]
+    finally:
+        session.close()
+
+
+def get_recent_ratings(limit: int = 50) -> list[dict]:
+    """Get the most recent ratings across all entities."""
+    session = get_session()
+    try:
+        rows = (
+            session.execute(
+                select(HumanRatingModel)
+                .order_by(HumanRatingModel.created_at.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+        return [_rating_to_dict(r) for r in rows]
+    finally:
+        session.close()
+
+
+def get_ratings_summary() -> dict:
+    """Aggregate stats: total, by action, by entity_type, by dimension."""
+    session = get_session()
+    try:
+        total = session.execute(
+            select(func.count(HumanRatingModel.id))
+        ).scalar() or 0
+
+        # Count by action
+        action_rows = session.execute(
+            select(HumanRatingModel.action, func.count(HumanRatingModel.id))
+            .where(HumanRatingModel.action.isnot(None))
+            .group_by(HumanRatingModel.action)
+        ).all()
+        by_action = {row[0]: row[1] for row in action_rows}
+
+        # Count by entity_type
+        type_rows = session.execute(
+            select(HumanRatingModel.entity_type, func.count(HumanRatingModel.id))
+            .group_by(HumanRatingModel.entity_type)
+        ).all()
+        by_entity_type = {row[0]: row[1] for row in type_rows}
+
+        # Average rating
+        avg_rating = session.execute(
+            select(func.avg(HumanRatingModel.rating))
+            .where(HumanRatingModel.rating.isnot(None))
+        ).scalar()
+
+        return {
+            "total": total,
+            "by_action": by_action,
+            "by_entity_type": by_entity_type,
+            "avg_rating": round(float(avg_rating), 2) if avg_rating else None,
+            "approved": by_action.get("approve", 0),
+            "flagged": by_action.get("flag_for_review", 0),
+            "marked_incorrect": by_action.get("mark_incorrect", 0),
+        }
+    finally:
+        session.close()
+
+
+def _rating_to_dict(m: HumanRatingModel) -> dict:
+    return {
+        "id": m.id,
+        "entity_type": m.entity_type,
+        "entity_id": m.entity_id,
+        "rating": m.rating,
+        "dimension": m.dimension,
+        "comment": m.comment,
+        "action": m.action,
+        "metadata": m.metadata_extra,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+    }

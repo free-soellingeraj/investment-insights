@@ -311,7 +311,10 @@ class PipelineAPIController(Controller):
         subtask_label = "all"
 
         # Allow caller to request a full force-refresh
-        body = await request.json() if request.content_type and "json" in (request.content_type or "") else {}
+        try:
+            body = await request.json() if request.content_type and "json" in (request.content_type or "") else {}
+        except Exception:
+            body = {}
         force = body.get("force", False)
 
         run_id = f"web-{uuid.uuid4().hex[:12]}"
@@ -371,14 +374,31 @@ class PipelineAPIController(Controller):
 
         # Launch immediately
         log_file = open(log_path, "w")
-        proc = subprocess.Popen(
-            cmd, stdout=log_file, stderr=subprocess.STDOUT,
-            cwd=str(Path(__file__).resolve().parent.parent),
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=log_file, stderr=subprocess.STDOUT,
+                cwd=str(Path(__file__).resolve().parent.parent),
+            )
+        except Exception as exc:
+            log_file.close()
+            # Mark as failed so it doesn't stay in 'running' status permanently
+            with get_session() as session:
+                session.execute(
+                    sa_text("""
+                        UPDATE pipeline_runs
+                        SET status = 'failed', completed_at = now(),
+                            error_message = :msg
+                        WHERE run_id = :run_id
+                    """),
+                    {"run_id": run_id, "msg": f"Popen failed: {exc}"},
+                )
+                session.commit()
+            logger.error("Failed to launch pipeline run %s: %s", run_id, exc)
+            return {"ok": False, "error": f"Failed to launch: {exc}", "run_id": run_id}
         _active_procs[run_id] = proc
 
         async def _wait_for_completion():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return_code = await loop.run_in_executor(None, proc.wait)
             log_file.close()
             _active_procs.pop(run_id, None)
@@ -516,15 +536,32 @@ class PipelineAPIController(Controller):
 
         # Launch as background subprocess
         log_file = open(log_path, "w")
-        proc = subprocess.Popen(
-            cmd, stdout=log_file, stderr=subprocess.STDOUT,
-            cwd=str(Path(__file__).resolve().parent.parent),
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=log_file, stderr=subprocess.STDOUT,
+                cwd=str(Path(__file__).resolve().parent.parent),
+            )
+        except Exception as exc:
+            log_file.close()
+            # Mark as failed so it doesn't stay in 'running' status permanently
+            with get_session() as session:
+                session.execute(
+                    sa_text("""
+                        UPDATE pipeline_runs
+                        SET status = 'failed', completed_at = now(),
+                            error_message = :msg
+                        WHERE run_id = :run_id
+                    """),
+                    {"run_id": run_id, "msg": f"Popen failed: {exc}"},
+                )
+                session.commit()
+            logger.error("Failed to launch stage run %s: %s", run_id, exc)
+            return {"ok": False, "error": f"Failed to launch: {exc}", "run_id": run_id}
         _active_procs[run_id] = proc
 
         # Fire-and-forget: update pipeline_run when process completes
         async def _wait_for_completion():
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             return_code = await loop.run_in_executor(None, proc.wait)
             log_file.close()
             _active_procs.pop(run_id, None)
@@ -609,6 +646,61 @@ class PipelineAPIController(Controller):
             asyncio.create_task(_launch_next_enqueued(ticker.upper()))
 
         return {"ok": True, "run_id": run_id, "previous_status": previous_status}
+
+    @get("/companies/{ticker:str}/ventures")
+    async def ventures(self, ticker: str) -> dict:
+        """Return subsidiaries and parent companies for a ticker."""
+        from sqlalchemy import text as sa_text
+
+        company = get_company_by_ticker(ticker)
+        if not company:
+            return {"error": "Company not found", "subsidiaries": [], "parents": []}
+
+        cid = company.id
+        subsidiaries = []
+        parents = []
+
+        with get_session() as session:
+            # Subsidiaries
+            rows = session.execute(
+                sa_text("""
+                    SELECT sub.id, sub.ticker, sub.slug, sub.company_name,
+                           sub.sector, sub.industry,
+                           cv.ownership_pct, cv.relationship_type, cv.notes
+                    FROM company_ventures cv
+                    JOIN companies sub ON cv.subsidiary_id = sub.id
+                    WHERE cv.parent_id = :cid
+                    ORDER BY sub.company_name
+                """),
+                {"cid": cid},
+            ).fetchall()
+            for r in rows:
+                subsidiaries.append({
+                    "id": r[0], "ticker": r[1], "slug": r[2],
+                    "company_name": r[3], "sector": r[4], "industry": r[5],
+                    "ownership_pct": r[6], "relationship_type": r[7], "notes": r[8],
+                })
+
+            # Parents
+            rows = session.execute(
+                sa_text("""
+                    SELECT p.id, p.ticker, p.slug, p.company_name,
+                           cv.ownership_pct, cv.relationship_type
+                    FROM company_ventures cv
+                    JOIN companies p ON cv.parent_id = p.id
+                    WHERE cv.subsidiary_id = :cid
+                    ORDER BY p.company_name
+                """),
+                {"cid": cid},
+            ).fetchall()
+            for r in rows:
+                parents.append({
+                    "id": r[0], "ticker": r[1], "slug": r[2],
+                    "company_name": r[3], "ownership_pct": r[4],
+                    "relationship_type": r[5],
+                })
+
+        return {"ticker": ticker.upper(), "subsidiaries": subsidiaries, "parents": parents}
 
     @get("/companies/{ticker:str}/runs")
     async def runs(self, ticker: str, request: Request) -> dict:
@@ -753,14 +845,33 @@ async def _launch_next_enqueued(ticker: str) -> None:
         return
 
     log_file = open(log_path, "w")
-    proc = subprocess.Popen(
-        cmd, stdout=log_file, stderr=subprocess.STDOUT,
-        cwd=str(Path(__file__).resolve().parent.parent),
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=log_file, stderr=subprocess.STDOUT,
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+    except Exception as exc:
+        log_file.close()
+        # Mark as failed so it doesn't stay in 'running' status permanently
+        with get_session() as session:
+            session.execute(
+                sa_text("""
+                    UPDATE pipeline_runs
+                    SET status = 'failed', completed_at = now(),
+                        error_message = :msg
+                    WHERE run_id = :run_id
+                """),
+                {"run_id": next_run_id, "msg": f"Popen failed: {exc}"},
+            )
+            session.commit()
+        logger.error("Failed to launch enqueued run %s: %s", next_run_id, exc)
+        # Try to drain the next enqueued run
+        await _launch_next_enqueued(ticker)
+        return
     _active_procs[next_run_id] = proc
 
     async def _wait_and_drain():
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return_code = await loop.run_in_executor(None, proc.wait)
         log_file.close()
         _active_procs.pop(next_run_id, None)

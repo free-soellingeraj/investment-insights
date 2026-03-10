@@ -105,7 +105,7 @@ async def run_pipeline(
     force_stages: set[str] | None = None,
     max_concurrency: int = 5,
     pipeline_run_id: int | None = None,
-    llm_concurrency: int = 50,
+    llm_concurrency: int = 8,
     source: str = "run_pipeline",
 ) -> list[StageResult]:
     """Run the DAG pipeline for multiple companies concurrently.
@@ -132,7 +132,7 @@ async def run_pipeline(
     # Create pipeline run if not provided
     run_id = str(uuid.uuid4())
     if pipeline_run_id is None:
-        ticker_list = [c.ticker for c in companies]
+        ticker_list = [c.ticker or c.slug or f"id:{c.id}" for c in companies]
         run_type = RunType.PARTIAL if len(companies) < 100 else RunType.FULL
         pr = create_pipeline_run(PipelineRun(
             run_id=run_id,

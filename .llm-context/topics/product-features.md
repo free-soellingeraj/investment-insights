@@ -12,7 +12,7 @@
 1. **Extract**: Keyword or LLM extractors on filings, news, patents, jobs
 2. **Classify**: Target (cost/revenue/general) + stage (planned/invested/realized)
 3. **Value**: Formula or LLM dollar estimation (3-year horizon)
-4. **Aggregate**: Weighted → quadrant (AI Leaders / Untapped Potential / Over-investing / AI-Resistant)
+4. **Aggregate**: Weighted → quadrant (AI Leaders / Untapped Potential / Over-investing / Emerging)
 
 ### Realization Sub-Scorers
 Filing NLP (35%), Product Analysis (25%), Job Signals (20%), Patent Signals (20%)

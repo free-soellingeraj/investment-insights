@@ -63,6 +63,7 @@ def main():
     )
     parser.add_argument("--tickers", nargs="*", help="Specific tickers to process")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of companies")
+    parser.add_argument("--offset", type=int, default=0, help="Skip first N companies (for parallel runs)")
     parser.add_argument(
         "--stages", nargs="*", default=["all"],
         help="Stages to run (default: all). Aliases: all, collect, score",
@@ -72,8 +73,8 @@ def main():
         help="Max concurrent companies in-flight (default: 20)",
     )
     parser.add_argument(
-        "--llm-concurrency", type=int, default=50,
-        help="Max concurrent LLM API calls across all companies (default: 50)",
+        "--llm-concurrency", type=int, default=8,
+        help="Max concurrent LLM API calls across all companies (default: 8)",
     )
     parser.add_argument(
         "--force", nargs="*", default=None,
@@ -128,6 +129,7 @@ def main():
         include_inactive=args.include_inactive,
         pipeline_run_id=existing_run_id,
         limit=args.limit,
+        offset=args.offset,
     )
 
     results = PipelineController.run_sync(request)

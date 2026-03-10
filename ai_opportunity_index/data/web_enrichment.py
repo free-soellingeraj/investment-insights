@@ -208,17 +208,27 @@ def _fetch_with_metadata(url: str) -> tuple[str | None, date | None, dict]:
 # ── LLM Extraction ───────────────────────────────────────────────────────
 
 def _extract_structured(text: str, prompt: str, output_type: type) -> object | None:
-    """Use pydantic_ai + Gemini Flash to extract structured data from text."""
-    from pydantic_ai import Agent
-    from pydantic_ai.models.google import GoogleModel
+    """Use LLM to extract structured data from text.
 
-    model = GoogleModel(LLM_EXTRACTION_MODEL, provider=get_google_provider())
-    agent = Agent(model, output_type=output_type)
+    Uses an explicit new event loop to avoid 'bound to a different event loop'
+    errors when called from asyncio.to_thread inside the pipeline.
+    """
+    import asyncio as _asyncio
+
+    from ai_opportunity_index.llm_backend import get_agent
+
+    agent = get_agent(output_type=output_type)
 
     full_prompt = f"{prompt}\n\n--- PAGE CONTENT ---\n{text}"
 
     try:
-        result = agent.run_sync(full_prompt)
+        # Create a fresh event loop for this thread to avoid cross-loop
+        # conflicts with pydantic-ai's internal asyncio primitives.
+        loop = _asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(agent.run(full_prompt))
+        finally:
+            loop.close()
         usage = result.usage()
         logger.info(
             "Web enrichment LLM: input=%d output=%d total=%d tokens",

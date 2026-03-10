@@ -41,7 +41,7 @@ ai_opportunity_index/
 1. **Collect**: External APIs → local JSON cache (`data/raw/`). Scoring never contacts external services.
 2. **Extract**: Raw text → `EvidencePassage` (target dimension, capture stage, confidence)
 3. **Value**: Evidence + financials → `ValuedEvidence` (3-year dollar estimates, horizon shapes)
-4. **Score**: Aggregation → `CompanyDollarScore` (ROI metrics, quadrant: AI Leaders / Untapped Potential / Over-investing / AI-Resistant)
+4. **Score**: Aggregation → `CompanyDollarScore` (ROI metrics, quadrant: AI Leaders / Untapped Potential / Over-investing / Emerging)
 
 ## Important Decisions
 

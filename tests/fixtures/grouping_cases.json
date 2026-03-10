@@ -1,0 +1,130 @@
+{
+  "text_similarity": [
+    {
+      "id": "identical_strings",
+      "a": "The company has invested heavily in artificial intelligence for cost reduction.",
+      "b": "The company has invested heavily in artificial intelligence for cost reduction.",
+      "expected": 1.0,
+      "tolerance": 0.001
+    },
+    {
+      "id": "completely_different",
+      "a": "Apple reported record quarterly revenue driven by iPhone sales in North America.",
+      "b": "The zebra quickly jumped over the lazy brown fox near the riverbank at dawn.",
+      "expected": 0.20,
+      "tolerance": 0.15
+    },
+    {
+      "id": "very_similar_paraphrase",
+      "a": "The firm is deploying machine learning models to automate customer service workflows.",
+      "b": "The firm is deploying machine learning models to automate customer support workflows.",
+      "expected": 0.95,
+      "tolerance": 0.10
+    },
+    {
+      "id": "moderate_overlap",
+      "a": "AI investments are expected to reduce operational costs by 15% over three years.",
+      "b": "The company expects AI-driven automation to cut costs significantly in the next few years.",
+      "expected": 0.50,
+      "tolerance": 0.20
+    },
+    {
+      "id": "empty_strings",
+      "a": "",
+      "b": "",
+      "expected": 1.0,
+      "tolerance": 0.001
+    },
+    {
+      "id": "one_empty",
+      "a": "Some text about AI investments and revenue growth potential.",
+      "b": "",
+      "expected": 0.0,
+      "tolerance": 0.001
+    },
+    {
+      "id": "case_insensitive_check",
+      "a": "AI REVENUE GROWTH IS ACCELERATING ACROSS ALL SEGMENTS",
+      "b": "ai revenue growth is accelerating across all segments",
+      "expected": 1.0,
+      "tolerance": 0.001
+    },
+    {
+      "id": "near_threshold_similar",
+      "a": "The company plans to invest in AI-powered analytics for revenue optimization.",
+      "b": "The company is investing in AI analytics tools to optimize its revenue streams.",
+      "expected": 0.60,
+      "tolerance": 0.15
+    },
+    {
+      "id": "long_truncation_check",
+      "a": "AI investments are growing rapidly in the technology sector, with companies spending billions on infrastructure and talent acquisition to build competitive advantages in machine learning, natural language processing, and computer vision applications that drive both cost reduction and revenue generation across multiple business segments and geographic regions worldwide. This additional text extends beyond 300 characters to test truncation behavior in the similarity function.",
+      "b": "AI investments are growing rapidly in the technology sector, with companies spending billions on infrastructure and talent acquisition to build competitive advantages in machine learning, natural language processing, and computer vision applications that drive both cost reduction and revenue generation across multiple business segments and geographic regions worldwide. This DIFFERENT text extends beyond 300 characters to test truncation behavior in the similarity function.",
+      "expected": 1.0,
+      "tolerance": 0.02
+    }
+  ],
+  "passage_grouping": [
+    {
+      "id": "empty_list",
+      "passages": [],
+      "expected_num_groups": 0
+    },
+    {
+      "id": "single_passage",
+      "passages": [
+        {"passage_text": "The company has invested $500M in AI infrastructure for cost savings.", "target_dimension": "cost", "confidence": 0.8}
+      ],
+      "expected_num_groups": 1,
+      "expected_group_sizes": [1]
+    },
+    {
+      "id": "all_identical",
+      "passages": [
+        {"passage_text": "AI spending is accelerating to reduce costs.", "target_dimension": "cost", "confidence": 0.7},
+        {"passage_text": "AI spending is accelerating to reduce costs.", "target_dimension": "cost", "confidence": 0.6},
+        {"passage_text": "AI spending is accelerating to reduce costs.", "target_dimension": "cost", "confidence": 0.9}
+      ],
+      "expected_num_groups": 1,
+      "expected_group_sizes": [3]
+    },
+    {
+      "id": "all_different",
+      "passages": [
+        {"passage_text": "Apple reported record quarterly revenue driven by iPhone sales in North America.", "target_dimension": "revenue", "confidence": 0.5},
+        {"passage_text": "The zebra quickly jumped over the lazy brown fox near the riverbank at dawn.", "target_dimension": "revenue", "confidence": 0.4},
+        {"passage_text": "Quantum computing research is advancing rapidly at several national laboratories.", "target_dimension": "revenue", "confidence": 0.3}
+      ],
+      "expected_num_groups": 3,
+      "expected_group_sizes": [1, 1, 1]
+    },
+    {
+      "id": "two_clusters",
+      "passages": [
+        {"passage_text": "The company is deploying machine learning models for customer service automation.", "target_dimension": "cost", "confidence": 0.8},
+        {"passage_text": "The company is deploying machine learning models for customer support automation.", "target_dimension": "cost", "confidence": 0.7},
+        {"passage_text": "Revenue from new AI products exceeded analyst expectations by a wide margin.", "target_dimension": "cost", "confidence": 0.6},
+        {"passage_text": "Revenue from new AI products surpassed analyst expectations significantly.", "target_dimension": "cost", "confidence": 0.5}
+      ],
+      "expected_num_groups": 2,
+      "expected_group_sizes": [2, 2]
+    },
+    {
+      "id": "max_group_size_enforcement",
+      "passages": [
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.9},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.8},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.7},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.6},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.5},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.4},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.3},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.2},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.1},
+        {"passage_text": "AI cost reduction initiative saves money through automation.", "target_dimension": "cost", "confidence": 0.05}
+      ],
+      "expected_num_groups": 2,
+      "first_group_max_size": 8
+    }
+  ]
+}

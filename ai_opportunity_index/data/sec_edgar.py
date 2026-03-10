@@ -112,6 +112,8 @@ def fetch_and_cache_filings(
     """Fetch filings and cache them locally.
 
     Returns list of paths to cached filing text files.
+    Also writes a _metadata.json sidecar with CIK, accession numbers,
+    and SEC EDGAR URLs so downstream extraction can populate source_url.
     """
     cache_dir = RAW_DIR / "filings" / ticker.upper()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -119,9 +121,34 @@ def fetch_and_cache_filings(
     filings = get_company_filings(cik, filing_type=filing_type, count=count)
     paths = []
 
+    # Build metadata index: filename -> filing metadata
+    metadata_path = cache_dir / "_metadata.json"
+    existing_metadata: dict = {}
+    if metadata_path.exists():
+        try:
+            existing_metadata = json.loads(metadata_path.read_text())
+        except Exception:
+            pass
+
     for filing in filings:
         filename = f"{filing_type}_{filing['filing_date']}.txt"
         filepath = cache_dir / filename
+
+        # Always update metadata even for cached filings
+        accession = filing["accession_number"]
+        primary_doc = filing.get("primary_document", "")
+        edgar_url = EDGAR_FULL_TEXT_URL.format(
+            cik=cik, accession=accession, filename=primary_doc,
+        )
+        existing_metadata[filename] = {
+            "cik": cik,
+            "accession_number": accession,
+            "accession_raw": filing.get("accession_raw", ""),
+            "primary_document": primary_doc,
+            "filing_date": filing["filing_date"],
+            "form": filing.get("form", filing_type),
+            "url": edgar_url,
+        }
 
         if filepath.exists():
             logger.debug("Using cached filing %s", filepath)
@@ -133,6 +160,12 @@ def fetch_and_cache_filings(
             filepath.write_text(text)
             paths.append(filepath)
             logger.info("Cached filing %s for %s", filename, ticker)
+
+    # Write metadata sidecar
+    try:
+        metadata_path.write_text(json.dumps(existing_metadata, indent=2))
+    except Exception as e:
+        logger.warning("Failed to write filing metadata for %s: %s", ticker, e)
 
     return paths
 
