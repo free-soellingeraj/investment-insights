@@ -787,8 +787,9 @@ def refresh_latest_scores_view():
     session = get_session()
     try:
         session.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY latest_company_scores"))
+        row_count = session.execute(text("SELECT count(*) FROM latest_company_scores")).scalar()
         session.commit()
-        logger.info("Refreshed latest_company_scores materialized view")
+        logger.info("Refreshed latest_company_scores materialized view (%d rows)", row_count)
     except Exception:
         session.rollback()
         raise
