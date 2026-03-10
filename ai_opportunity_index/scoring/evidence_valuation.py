@@ -21,6 +21,7 @@ from ai_opportunity_index.scoring.calibration import (
     calibrate_confidence,
     check_dollar_sanity,
     source_authority_weight,
+    temporal_weight,
 )
 from ai_opportunity_index.domains import (
     CaptureDetails,
@@ -93,6 +94,27 @@ class FinalOutput(BaseModel):
     investment_detail: dict | None = None
     capture_detail: dict | None = None
     discrepancies: list[DiscrepancyInfo] = []
+
+
+def _map_source_type_to_calibration(source_type: str) -> str:
+    """Map evidence source types to calibration curve keys."""
+    _SOURCE_TYPE_MAP = {
+        "filing": "sec_filing",
+        "sec_filing": "sec_filing",
+        "news": "news",
+        "github": "github",
+    }
+    return _SOURCE_TYPE_MAP.get(source_type, "llm")
+
+
+def _dominant_source_type(group: EvidenceGroup) -> str:
+    """Return the most common source type in a group, mapped for calibration."""
+    from collections import Counter
+    types = [p.source_type or "unknown" for p in group.passages]
+    if not types:
+        return "llm"
+    dominant = Counter(types).most_common(1)[0][0]
+    return _map_source_type_to_calibration(dominant)
 
 
 def _normalize_evidence_type(raw: str) -> ValuationEvidenceType:
@@ -341,10 +363,11 @@ async def run_preliminary_valuations(
         output, in_tokens, out_tokens = result
         ev_type = _normalize_evidence_type(output.evidence_type)
 
-        # Calibrate LLM confidence
+        # Calibrate LLM confidence using actual source type
         raw_confidence = output.confidence
-        calibrated_confidence = calibrate_confidence(raw_confidence, "llm")
-        logger.debug("[%s] Calibrated confidence: %.2f -> %.2f", ticker, raw_confidence, calibrated_confidence)
+        calibration_source = _dominant_source_type(group)
+        calibrated_confidence = calibrate_confidence(raw_confidence, calibration_source)
+        logger.debug("[%s] Calibrated confidence: %.2f -> %.2f (source=%s)", ticker, raw_confidence, calibrated_confidence, calibration_source)
 
         # Parse type-specific details
         plan_detail = None
@@ -508,10 +531,11 @@ async def run_final_valuations(
         # Normalize LLM output
         ev_type = _normalize_evidence_type(output.evidence_type)
 
-        # Calibrate LLM confidence
+        # Calibrate LLM confidence using actual source type
         raw_confidence = output.confidence
-        calibrated_confidence = calibrate_confidence(raw_confidence, "llm")
-        logger.debug("[%s] Calibrated confidence: %.2f -> %.2f", ticker, raw_confidence, calibrated_confidence)
+        calibration_source = _dominant_source_type(group)
+        calibrated_confidence = calibrate_confidence(raw_confidence, calibration_source)
+        logger.debug("[%s] Calibrated confidence: %.2f -> %.2f (source=%s)", ticker, raw_confidence, calibrated_confidence, calibration_source)
 
         # Parse type-specific details
         plan_detail = None
@@ -528,19 +552,23 @@ async def run_final_valuations(
         # Compute factor score components
         dollar_low = output.dollar_low
         dollar_high = output.dollar_high
+        # Ensure low <= high numerically (LLMs sometimes reverse for negatives)
+        if dollar_low is not None and dollar_high is not None and dollar_low > dollar_high:
+            dollar_low, dollar_high = dollar_high, dollar_low
+
+        # Apply dollar sanity to low and high individually BEFORE computing mid
+        if dollar_low is not None and dollar_low > 0:
+            dollar_low, low_warnings = check_dollar_sanity(dollar_low, revenue, None)
+            for warning in low_warnings:
+                logger.warning("[%s] Dollar sanity low (group=%d): %s", ticker, group.id, warning)
+        if dollar_high is not None and dollar_high > 0:
+            dollar_high, high_warnings = check_dollar_sanity(dollar_high, revenue, None)
+            for warning in high_warnings:
+                logger.warning("[%s] Dollar sanity high (group=%d): %s", ticker, group.id, warning)
+
         dollar_mid = None
         if dollar_low is not None and dollar_high is not None:
-            # Ensure low <= high numerically (LLMs sometimes reverse for negatives)
-            if dollar_low > dollar_high:
-                dollar_low, dollar_high = dollar_high, dollar_low
             dollar_mid = (dollar_low + dollar_high) / 2.0
-
-        # Dollar sanity check
-        if dollar_mid is not None and dollar_mid > 0:
-            sanity_dollar_mid, sanity_warnings = check_dollar_sanity(dollar_mid, revenue, None)
-            for warning in sanity_warnings:
-                logger.warning("[%s] Dollar sanity (group=%d): %s", ticker, group.id, warning)
-            dollar_mid = sanity_dollar_mid
 
         # Compute authority weight from the evidence group's source types
         authority_weights = []
@@ -553,7 +581,12 @@ async def run_final_valuations(
         specificity = max(0.0, min(1.0, output.specificity))
         magnitude = compute_magnitude(dollar_mid, revenue)
         stage_weight = STAGE_WEIGHTS.get(ev_type, 0.5)
-        recency = compute_recency(group.date_latest)
+        # Use source-specific temporal decay instead of flat recency
+        if group.date_latest is not None:
+            days_old = max(0, (date.today() - group.date_latest).days)
+        else:
+            days_old = 180  # default age for undated groups
+        recency = temporal_weight(days_old, calibration_source)
         factor_score = compute_factor_score(specificity, magnitude, stage_weight, recency, auth_weight)
 
         val = Valuation(

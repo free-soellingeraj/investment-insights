@@ -111,7 +111,8 @@ def score_revenue_opportunity(
                 {"soc": g, "name": soc_names.get(g, g), "ai_applicability": round(soc_lookup.get(g, OPP_DEFAULT_SOC_SCORE), 4)}
                 for g in own_soc_groups
             ]
-            score = _normalize_score(sum(own_scores) / len(own_scores), OPP_NORMALIZE_MIN, OPP_NORMALIZE_MAX)
+            raw = min(sum(own_scores) / len(own_scores), OPP_NORMALIZE_MAX * 0.9)
+            score = _normalize_score(raw, OPP_NORMALIZE_MIN, OPP_NORMALIZE_MAX)
             return {"score": score, "detail": detail}
         return {"score": OPP_DEFAULT_SCORE, "detail": {**detail, "reason": "No occupational mapping available"}}
 
@@ -147,6 +148,7 @@ def score_revenue_opportunity(
             avg = avg * OPP_B2B_BOOST
             detail["after_boost"] = round(avg, 4)
         detail["reason"] = "Revenue opportunity based on customer industries' AI applicability"
+        avg = min(avg, OPP_NORMALIZE_MAX * 0.9)
         score = _normalize_score(avg, OPP_NORMALIZE_MIN, OPP_NORMALIZE_MAX)
         return {"score": score, "detail": detail}
 
@@ -211,6 +213,7 @@ def score_cost_opportunity(
         detail["after_employee_scaling"] = round(avg, 4)
 
     detail["reason"] = "Cost opportunity based on workforce occupations' AI applicability"
+    avg = min(avg, OPP_NORMALIZE_MAX * 0.9)
     score = _normalize_score(avg, OPP_NORMALIZE_MIN, OPP_NORMALIZE_MAX)
     return {"score": score, "detail": detail}
 
@@ -243,6 +246,9 @@ def compute_opportunity_score(
         OPPORTUNITY_WEIGHTS["revenue_opportunity"] * rev_score
         + OPPORTUNITY_WEIGHTS["cost_opportunity"] * cost_score
     )
+
+    if composite > 0.95:
+        logger.warning("Composite opportunity %.4f exceeds 0.95 for sic=%s", composite, sic)
 
     return {
         "revenue_opportunity": round(rev_score, 4),
@@ -295,7 +301,10 @@ def _score_from_sector(
         cost_detail["employee_count"] = employees
         cost_detail["employee_scaling_factor"] = round(emp_factor, 4)
 
-    cost_detail["reason"] = f"Cost opportunity from {sector} sector workforce profile"
+    cost_raw = cost_raw * 0.7
+    cost_detail["sic_null_penalty"] = 0.7
+    cost_detail["reason"] = f"Cost opportunity from {sector} sector workforce profile (SIC-null penalty applied)"
+    cost_raw = min(cost_raw, OPP_NORMALIZE_MAX * 0.9)
     cost_score = _normalize_score(cost_raw, OPP_NORMALIZE_MIN, OPP_NORMALIZE_MAX)
 
     # Revenue opportunity
@@ -316,12 +325,18 @@ def _score_from_sector(
             rev_detail["ai_industry_boost"] = OPP_AI_INDUSTRY_BOOST
             rev_detail["reason"] += f" (boosted: '{industry}' is AI-adjacent)"
 
+    rev_raw = rev_raw * 0.7
+    rev_detail["sic_null_penalty"] = 0.7
+    rev_raw = min(rev_raw, OPP_NORMALIZE_MAX * 0.9)
     rev_score = _normalize_score(rev_raw, OPP_NORMALIZE_MIN, OPP_NORMALIZE_MAX)
 
     composite = (
         OPPORTUNITY_WEIGHTS["revenue_opportunity"] * rev_score
         + OPPORTUNITY_WEIGHTS["cost_opportunity"] * cost_score
     )
+
+    if composite > 0.95:
+        logger.warning("Composite opportunity %.4f exceeds 0.95 for sector=%s industry=%s", composite, sector, industry)
 
     return {
         "revenue_opportunity": round(rev_score, 4),

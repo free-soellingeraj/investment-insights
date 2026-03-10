@@ -1536,6 +1536,14 @@ def main():
     ))
 
     try:
+        try:
+            refresh_latest_scores_view()
+            logger.info("Pre-scoring materialized view refresh complete")
+        except Exception as e:
+            logger.warning("Pre-scoring materialized view refresh failed (non-fatal): %s", e)
+
+        sic_null_count = sum(1 for c in companies if c.sic is None)
+        logger.info("SIC-null diagnostics: %d/%d companies have sic IS NULL", sic_null_count, len(companies))
         logger.info("=== Scoring %d companies (run: %s) ===", len(companies), score_run_id[:8])
 
         scored = 0

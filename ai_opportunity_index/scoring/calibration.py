@@ -53,7 +53,7 @@ _DEFAULT_HALF_LIFE = 90.0
 
 # ── Dollar sanity thresholds ─────────────────────────────────────────────
 
-_MAX_REVENUE_MULTIPLE = 2.0
+_MAX_REVENUE_MULTIPLE = 0.5
 _MAX_MARKET_CAP_FRACTION = 0.5
 _GLOBAL_DOLLAR_CAP = 10_000_000_000.0  # $10B
 
@@ -178,8 +178,9 @@ def check_dollar_sanity(
     if adjusted > _GLOBAL_DOLLAR_CAP:
         warnings.append(
             f"Estimate ${adjusted:,.0f} exceeds global cap of "
-            f"${_GLOBAL_DOLLAR_CAP:,.0f}; flagged"
+            f"${_GLOBAL_DOLLAR_CAP:,.0f}; capped"
         )
+        adjusted = _GLOBAL_DOLLAR_CAP
 
     return (adjusted, warnings)
 

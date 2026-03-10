@@ -390,11 +390,11 @@ class TestConfidenceCalibration:
 
 class TestDollarSanityChecking:
 
-    def test_cap_at_2x_revenue(self):
+    def test_cap_at_0_5x_revenue(self):
         from ai_opportunity_index.scoring.calibration import check_dollar_sanity
 
         adjusted, warnings = check_dollar_sanity(3_000_000_000, 1_000_000_000, None)
-        assert adjusted == 2_000_000_000  # 2x revenue
+        assert adjusted == 500_000_000  # 0.5x revenue
         assert any("revenue" in w.lower() for w in warnings)
 
     def test_cap_at_0_5x_market_cap(self):
@@ -431,10 +431,10 @@ class TestDollarSanityChecking:
         """If both caps apply, the tighter one wins (due to sequential application)."""
         from ai_opportunity_index.scoring.calibration import check_dollar_sanity
 
-        # Revenue cap = 2 * 100M = 200M. Market cap cap = 0.5 * 300M = 150M.
-        # Revenue cap applied first (to 200M), then market cap cap to 150M.
+        # Revenue cap = 0.5 * 100M = 50M. Market cap cap = 0.5 * 300M = 150M.
+        # Revenue cap applied first (to 50M), market cap doesn't trigger.
         adjusted, _ = check_dollar_sanity(500_000_000, 100_000_000, 300_000_000)
-        assert adjusted == 150_000_000
+        assert adjusted == 50_000_000
 
     def test_zero_estimate_no_warnings(self):
         from ai_opportunity_index.scoring.calibration import check_dollar_sanity
