@@ -136,17 +136,17 @@ class TestCheckDollarSanity:
     # -- Revenue cap --
 
     def test_revenue_cap(self):
-        """Estimate > 2x revenue is capped."""
+        """Estimate > 0.5x revenue is capped."""
         adjusted, warnings = check_dollar_sanity(
             3_000_000_000, company_revenue=1_000_000_000, company_market_cap=None
         )
-        assert adjusted == 2_000_000_000
+        assert adjusted == 500_000_000
         assert any("revenue" in w.lower() for w in warnings)
 
     def test_revenue_cap_no_revenue(self):
         """No revenue info means no revenue cap."""
         adjusted, warnings = check_dollar_sanity(5e9, None, None)
-        # Only the round-number warning and possibly the global cap warning
+        # Only the round-number warning, no cap applied (under $10B global)
         assert adjusted == 5e9
 
     # -- Market cap cap --
@@ -163,22 +163,23 @@ class TestCheckDollarSanity:
 
     def test_both_caps_revenue_wins(self):
         """When both caps apply, the tighter one wins."""
-        # Revenue cap: 2 * 1B = 2B;  Market cap: 0.5 * 20B = 10B
+        # Revenue cap: 0.5 * 1B = 0.5B;  Market cap: 0.5 * 20B = 10B
         # Revenue is more restrictive, applied first.
         adjusted, warnings = check_dollar_sanity(5e9, 1e9, 20e9)
-        assert adjusted == 2e9
+        assert adjusted == 0.5e9
 
     def test_both_caps_market_cap_wins(self):
         """Market cap cap can be tighter than revenue cap."""
-        # Revenue cap: 2 * 100B = 200B;  Market cap: 0.5 * 2B = 1B
+        # Revenue cap: 0.5 * 100B = 50B;  Market cap: 0.5 * 2B = 1B
         adjusted, warnings = check_dollar_sanity(5e9, 100e9, 2e9)
         assert adjusted == 1e9
 
-    # -- Global $10B flag --
+    # -- Global $10B cap --
 
     def test_global_cap_flag(self):
-        """Estimates over $10B are flagged (but not necessarily capped if within other limits)."""
+        """Estimates over $10B are capped to $10B."""
         adjusted, warnings = check_dollar_sanity(15e9, 100e9, 100e9)
+        assert adjusted == 10e9
         assert any("global cap" in w.lower() for w in warnings)
 
     # -- Round number detection --

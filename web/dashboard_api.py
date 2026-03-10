@@ -79,6 +79,10 @@ async def dashboard_stats() -> dict:
         # Sort by ai_index_usd desc and take top 25
         top_companies.sort(key=lambda r: r.get("ai_index_usd") or 0, reverse=True)
         top_companies = top_companies[:25]
+        # Serialize scored_at for JSON
+        for tc in top_companies:
+            if tc.get("scored_at") and hasattr(tc["scored_at"], "isoformat"):
+                tc["scored_at"] = tc["scored_at"].isoformat()
 
         # Pipeline activity
         pipeline_activity = rows("""
