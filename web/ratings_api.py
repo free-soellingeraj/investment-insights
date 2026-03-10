@@ -55,11 +55,20 @@ async def api_ratings_create(request: Request) -> dict:
     except (TypeError, ValueError):
         return {"ok": False, "error": "entity_id must be an integer"}
 
+    # Map frontend thumb field to numeric rating
+    thumb = body.get("thumb")
+    if thumb == "up":
+        rating = 1
+    elif thumb == "down":
+        rating = -1
+    else:
+        rating = body.get("rating")
+
     try:
         result = create_human_rating(
             entity_type=entity_type,
             entity_id=entity_id,
-            rating=body.get("rating"),
+            rating=rating,
             dimension=body.get("dimension", "overall"),
             comment=body.get("comment"),
             action=body.get("action"),

@@ -947,7 +947,7 @@ def _group_to_gql(g) -> EvidenceGroupType:
         evidence_type=g.evidence_type.value
         if hasattr(g.evidence_type, "value")
         else g.evidence_type,
-        passage_count=g.passage_count,
+        passage_count=len(g.passages) if hasattr(g, 'passages') and g.passages is not None else g.passage_count,
         representative_text=g.representative_text,
         mean_confidence=g.mean_confidence,
         date_earliest=g.date_earliest,
